@@ -1,0 +1,43 @@
+/node_modules
+/out
+/out.min
+vsc-extension-quickstart.md
+*.vsix
+.EIDE
+.vscodeignore
+./lib
+/dist
+/doc
+/note.md
+pack.js
+test.js
+*.js.map
+*.cpuprofile
+
+# private
+/src/Telemetry
+/src/Private
+
+# eide vars
+/res/data/config.json
+/res/data/sln.record
+/res/data/data.yaml
+
+# internal template projects
+res/template/projects
+
+# bin
+bin
+bin/builder/*.xml
+bin/builder/*.exe.config
+bin/tools/*
+bin_bk
+dotnet-runtime*.exe
+
+# shell script
+/*.sh
+
+# html
+/src/html/**/node_modules
+/src/html/callgraph_view/dist
+/src/html/callgraph_view/fixtures

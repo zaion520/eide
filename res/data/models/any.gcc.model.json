@@ -1,0 +1,466 @@
+{
+    "name": "GNU Toolchain",
+    "id": "GCC",
+    "toolPrefix": "",
+    "useUnixPath": true,
+    "version": {
+        "args": "--version",
+        "matcher": "\\((?<name>.*?)\\) (?<version>[\\d\\.]+)"
+    },
+    "global": {
+        "output-debug-info": {
+            "type": "selectable",
+            "command": {
+                "enable": "-g",
+                "disable": "",
+                "dwarf-2": "-g -gdwarf-2",
+                "dwarf-3": "-g -gdwarf-3",
+                "dwarf-4": "-g -gdwarf-4",
+                "dwarf-5": "-g -gdwarf-5",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "cpp",
+                "asm"
+            ]
+        },
+        "optimization": {
+            "type": "selectable",
+            "command": {
+                "false": "",
+                "level-0": "-O0",
+                "level-1": "-O1",
+                "level-2": "-O2",
+                "level-3": "-O3",
+                "level-size": "-Os",
+                "level-size-Oz": "-Oz",
+                "level-fast": "-Ofast",
+                "level-debug": "-Og"
+            },
+            "group": [
+                "c",
+                "cpp"
+            ]
+        },
+        "optimization-lto": {
+            "type": "selectable",
+            "command": {
+                "true": "-flto",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "cpp",
+                "linker",
+                "linker-g++"
+            ]
+        },
+        "signed-char": {
+            "type": "selectable",
+            "command": {
+                "true": "-fsigned-char",
+                "false": "-funsigned-char"
+            },
+            "group": [
+                "c",
+                "cpp"
+            ]
+        },
+        "no-rtti": {
+            "type": "selectable",
+            "command": {
+                "true": "-fno-rtti",
+                "false": ""
+            },
+            "group": [
+                "cpp"
+            ]
+        },
+        "no-exceptions": {
+            "type": "selectable",
+            "command": {
+                "true": "-fno-exceptions",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "cpp"
+            ]
+        },
+        "one-elf-section-per-function": {
+            "type": "selectable",
+            "command": {
+                "true": "-ffunction-sections",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "cpp"
+            ]
+        },
+        "one-elf-section-per-data": {
+            "type": "selectable",
+            "command": {
+                "true": "-fdata-sections",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "cpp"
+            ]
+        },
+        "turn-Warning-into-errors": {
+            "type": "selectable",
+            "command": {
+                "true": "-Werror",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "cpp"
+            ]
+        },
+        "warnings": {
+            "type": "selectable",
+            "command": {
+                "false": "",
+                "unspecified": "",
+                "no-warnings": "-w",
+                "all-warnings": "-Wall",
+                "more-strict-warnings": "-Wall -Wextra -Wpedantic -Wshadow -Wconversion"
+            },
+            "group": [
+                "c",
+                "cpp"
+            ]
+        },
+        "callgraph-info": {
+            "type": "selectable",
+            "command": {
+                "true": "-fcallgraph-info",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "asm",
+                "cpp",
+                "linker",
+                "linker-g++"
+            ]
+        },
+        "stack-usage": {
+            "type": "selectable",
+            "command": {
+                "true": "-fstack-usage",
+                "false": ""
+            },
+            "group": [
+                "c",
+                "asm",
+                "cpp",
+                "linker",
+                "linker-g++"
+            ]
+        },
+        "misc-control": {
+            "type": "list",
+            "command": "",
+            "group": [
+                "c",
+                "cpp",
+                "asm"
+            ]
+        },
+        "C_FLAGS": {
+            "type": "list",
+            "command": "",
+            "group": [
+                "c"
+            ]
+        },
+        "CXX_FLAGS": {
+            "type": "list",
+            "command": "",
+            "group": [
+                "cpp"
+            ]
+        },
+        "ASM_FLAGS": {
+            "type": "list",
+            "command": "",
+            "group": [
+                "asm"
+            ]
+        }
+    },
+    "groups": {
+        "c": {
+            "$path": "bin/${toolPrefix}gcc",
+            "$includes": {
+                "body": "-I${value}"
+            },
+            "$defines": {
+                "body": "-D\"${key}=${value}\"",
+                "body_noval": "-D\"${key}\""
+            },
+            "$invoke": {
+                "useFile": true,
+                "body": "@${value}"
+            },
+            "$output": "-o ${out} -MMD ${in}",
+            "$default": [
+                "-c",
+                "-xc"
+            ],
+            "$language-c": {
+                "type": "value",
+                "command": "-std="
+            }
+        },
+        "cpp": {
+            "$path": "bin/${toolPrefix}g++",
+            "$includes": {
+                "body": "-I${value}"
+            },
+            "$defines": {
+                "body": "-D\"${key}=${value}\"",
+                "body_noval": "-D\"${key}\""
+            },
+            "$invoke": {
+                "useFile": true,
+                "body": "@${value}"
+            },
+            "$output": "-o ${out} -MMD ${in}",
+            "$default": [
+                "-c"
+            ],
+            "$language-cpp": {
+                "type": "value",
+                "command": "-std="
+            }
+        },
+        "asm": {
+            "$path": "bin/${toolPrefix}gcc",
+            "$includes": {
+                "body": "-I${value}"
+            },
+            "$output": "-o ${out} -MMD ${in}",
+            "$invoke": {
+                "useFile": true,
+                "body": "@${value}"
+            },
+            "$default": [
+                "-c",
+                "-x assembler-with-cpp"
+            ],
+            "defines": {
+                "type": "list",
+                "command": "-D"
+            }
+        },
+        "linker": {
+            "$path": "bin/${toolPrefix}gcc",
+            "$libs": {
+                "body": "-L${value}"
+            },
+            "$invoke": {
+                "useFile": true,
+                "body": "@${value}"
+            },
+            "$output": "-o ${out} ${in} ${lib_flags}",
+            "$outputSuffix": ".elf",
+            "$linkMap": {
+                "type": "value",
+                "command": "-Wl,-Map=${mapPath}"
+            },
+            "$LIB_FLAGS": {
+                "type": "list",
+                "command": ""
+            },
+            "print-mem-usage": {
+                "type": "selectable",
+                "command": {
+                    "true": "-Wl,--print-memory-usage",
+                    "false": ""
+                }
+            },
+            "remove-unused-input-sections": {
+                "type": "selectable",
+                "command": {
+                    "true": "-Wl,--gc-sections",
+                    "false": ""
+                }
+            },
+            "use-linker-plugin": {
+                "type": "selectable",
+                "command": {
+                    "true": "-fuse-linker-plugin",
+                    "false": ""
+                }
+            },
+            "linker-script": {
+                "type": "list",
+                "command": "-T "
+            },
+            "misc-control": {
+                "type": "list",
+                "command": ""
+            },
+            "LD_FLAGS": {
+                "type": "list",
+                "command": ""
+            },
+            "$outputBin": [
+                {
+                    "name": "output hex file",
+                    "toolPath": "bin/${toolPrefix}objcopy",
+                    "outputSuffix": ".hex",
+                    "command": "-O ihex ${linkerOutput} ${output}"
+                },
+                {
+                    "name": "output bin file",
+                    "toolPath": "bin/${toolPrefix}objcopy",
+                    "outputSuffix": ".bin",
+                    "command": "-O binary ${linkerOutput} ${output}"
+                }
+            ]
+        },
+        "linker-g++": {
+            "$path": "bin/${toolPrefix}g++",
+            "$libs": {
+                "body": "-L${value}"
+            },
+            "$invoke": {
+                "useFile": true,
+                "body": "@${value}"
+            },
+            "$output": "-o ${out} ${in} ${lib_flags}",
+            "$outputSuffix": ".elf",
+            "$linkMap": {
+                "type": "value",
+                "command": "-Wl,-Map=${mapPath}"
+            },
+            "$LIB_FLAGS": {
+                "type": "list",
+                "command": ""
+            },
+            "print-mem-usage": {
+                "type": "selectable",
+                "command": {
+                    "true": "-Wl,--print-memory-usage",
+                    "false": ""
+                }
+            },
+            "remove-unused-input-sections": {
+                "type": "selectable",
+                "command": {
+                    "true": "-Wl,--gc-sections",
+                    "false": ""
+                }
+            },
+            "use-linker-plugin": {
+                "type": "selectable",
+                "command": {
+                    "true": "-fuse-linker-plugin",
+                    "false": ""
+                }
+            },
+            "linker-script": {
+                "type": "list",
+                "command": "-T "
+            },
+            "misc-control": {
+                "type": "list",
+                "command": ""
+            },
+            "LD_FLAGS": {
+                "type": "list",
+                "command": ""
+            },
+            "$outputBin": [
+                {
+                    "name": "output hex file",
+                    "toolPath": "bin/${toolPrefix}objcopy",
+                    "outputSuffix": ".hex",
+                    "command": "-O ihex ${linkerOutput} ${output}"
+                },
+                {
+                    "name": "output bin file",
+                    "toolPath": "bin/${toolPrefix}objcopy",
+                    "outputSuffix": ".bin",
+                    "command": "-O binary ${linkerOutput} ${output}"
+                }
+            ]
+        },
+        "linker-ld": {
+            "$path": "bin/${toolPrefix}ld",
+            "$libs": {
+                "body": "-L${value}"
+            },
+            "$invoke": {
+                "useFile": true,
+                "body": "@${value}"
+            },
+            "$output": "-o ${out} ${in} ${lib_flags}",
+            "$outputSuffix": ".elf",
+            "$linkMap": {
+                "type": "value",
+                "command": "-Map=${mapPath}"
+            },
+            "$LIB_FLAGS": {
+                "type": "list",
+                "command": ""
+            },
+            "print-mem-usage": {
+                "type": "selectable",
+                "command": {
+                    "true": "--print-memory-usage",
+                    "false": ""
+                }
+            },
+            "remove-unused-input-sections": {
+                "type": "selectable",
+                "command": {
+                    "true": "--gc-sections",
+                    "false": ""
+                }
+            },
+            "linker-script": {
+                "type": "list",
+                "command": "-T "
+            },
+            "misc-control": {
+                "type": "list",
+                "command": ""
+            },
+            "LD_FLAGS": {
+                "type": "list",
+                "command": ""
+            },
+            "$outputBin": [
+                {
+                    "name": "output hex file",
+                    "toolPath": "bin/${toolPrefix}objcopy",
+                    "outputSuffix": ".hex",
+                    "command": "-O ihex ${linkerOutput} ${output}"
+                },
+                {
+                    "name": "output bin file",
+                    "toolPath": "bin/${toolPrefix}objcopy",
+                    "outputSuffix": ".bin",
+                    "command": "-O binary ${linkerOutput} ${output}"
+                }
+            ]
+        },
+        "linker-lib": {
+            "$path": "bin/${toolPrefix}ar",
+            "$invoke": {
+                "useFile": true,
+                "body": "@${value}"
+            },
+            "$output": "-rcv ${out} ${in}",
+            "$outputSuffix": ".a"
+        }
+    }
+}

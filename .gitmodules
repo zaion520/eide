@@ -1,0 +1,3 @@
+[submodule "lib/node-utility"]
+	path = lib/node-utility
+	url = git@github.com:github0null/node-utility.git

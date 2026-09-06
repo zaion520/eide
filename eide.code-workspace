@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"search.useIgnoreFiles": false,
+		"js/ts.tsdk.path": "node_modules/typescript/lib",
+		"typescript.tsdk": "node_modules\\typescript\\lib"
+	}
+}

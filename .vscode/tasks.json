@@ -1,0 +1,36 @@
+// See https://go.microsoft.com/fwlink/?LinkId=733558
+// for the documentation about the tasks.json format
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "npm",
+			"script": "webpack",
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build vsix",
+			"type": "shell",
+			"command": "vsce package",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "publish app",
+			"type": "shell",
+			"command": "vsce publish",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "publish pre-release app",
+			"type": "shell",
+			"command": "vsce publish --pre-release",
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

@@ -1,0 +1,2688 @@
+/*
+    MIT License
+
+    Copyright (c) 2019 github0null
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+*/
+
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as node7z from 'node-7z';
+import * as NodePath from 'path';
+import * as ChildProcess from 'child_process';
+import * as yaml from 'yaml';
+
+import { GlobalEvent } from './GlobalEvents';
+import { OperationExplorer } from './OperationExplorer';
+import { ProjectExplorer, ProjTreeItem } from './EIDEProjectExplorer';
+import { ResManager } from './ResManager';
+import { LogAnalyzer } from './LogAnalyzer';
+import { ResInstaller } from './ResInstaller';
+import * as mcp from './MCPServer';
+
+import {
+    ERROR, WARNING, INFORMATION,
+    view_str$operation$serialport, view_str$operation$baudrate, view_str$operation$serialport_name,
+    txt_install_now, txt_yes, view_str$prompt$feedback, rating_text, later_text, sponsor_author_text,
+    view_str$prompt$install_dotnet_and_restart_vscode,
+    view_str$prompt$install_dotnet_failed,
+    view_str$prompt$not_found_compiler, view_str$prompt$debugCfgNotSupported, not_support_no_arm_project,
+    view_str$prompt$requireOtherExtension, view_str$add_missed_stubs
+} from './StringTable';
+import { LogDumper } from './LogDumper';
+import { StatusBarManager } from './StatusBarManager';
+import { File } from '../lib/node-utility/File';
+import { newMessage, ExceptionToMessage } from './Message';
+import { SettingManager } from './SettingManager';
+import { WorkspaceManager } from './WorkspaceManager';
+import { VirtualDocument } from './VirtualDocsProvider';
+import * as utility from './utility';
+import * as platform from './Platform';
+
+const extension_deps: string[] = [];
+
+let projectExplorer: ProjectExplorer;
+let operationExplorer: OperationExplorer;
+
+// this method is called when your extension is activated
+// your extension is activated the very first time the command is executed
+export async function activate(context: vscode.ExtensionContext) {
+
+    // init event emiter
+    RegisterGlobalEvent();
+    RegisterMsgListener();
+
+    GlobalEvent.log_info('Embedded IDE launch begin');
+
+    // init platform
+    try {
+        platform.init(context);
+    } catch (error) {
+        const msg = (<Error>error).message;
+        vscode.window.showErrorMessage(msg);
+        GlobalEvent.log_error(msg);
+        return;
+    }
+
+    // try active dependence plug-ins
+    for (const name of extension_deps) {
+        const extension = vscode.extensions.getExtension(name);
+        if (extension) {
+            if (!extension.isActive) {
+                try {
+                    GlobalEvent.log_info(`Active extension: '${name}'`);
+                    await extension.activate();
+                } catch (error) {
+                    GlobalEvent.log_warn(error);
+                }
+            }
+        } else {
+            GlobalEvent.log_warn(`The extension '${name}' is not enabled or installed !`);
+        }
+    }
+
+    // init eide components
+    const done = await InitComponents(context);
+    if (!done) {
+        vscode.window.showErrorMessage(`${ERROR} : Install eide binaries failed !, You can download offline [vsix package](https://github.com/github0null/eide/releases) and install it !`);
+        return;
+    }
+
+    // register vscode commands
+    const subscriptions = context.subscriptions;
+
+    // global user commands
+    subscriptions.push(vscode.commands.registerCommand('eide.ShowUUID', () => ShowUUID()));
+    subscriptions.push(vscode.commands.registerCommand('eide.c51ToSdcc', () => c51ToSDCC()));
+    subscriptions.push(vscode.commands.registerCommand('eide.ReloadJlinkDevs', () => reloadJlinkDevices()));
+    subscriptions.push(vscode.commands.registerCommand('eide.ReloadStm8Devs', () => reloadStm8Devices()));
+    subscriptions.push(vscode.commands.registerCommand('eide.create.clang-format.file', () => newClangFormatFile()));
+    subscriptions.push(vscode.commands.registerCommand('eide.cleanCache', () => cleanCache()));
+    subscriptions.push(vscode.commands.registerCommand('eide.refresh.external_tools_index', () => {
+        ResInstaller.instance()
+            .refreshExternalToolsIndex(true)
+            .then(() => GlobalEvent.emit('msg', newMessage('Info', 'Refresh Done.')))
+            .catch(err => {
+                GlobalEvent.log_warn(err);
+                GlobalEvent.log_show();
+            });
+    }));
+    subscriptions.push(vscode.commands.registerCommand('eide.debug.start', (item) => {
+        startDebugging(item)
+            .catch(err => GlobalEvent.emit('error', err));
+    }));
+    subscriptions.push(vscode.commands.registerCommand('eide.debug.start.attach', (item) => {
+        startDebugging(item, true)
+            .catch(err => GlobalEvent.emit('error', err));
+    }));
+
+    // internal command
+    // TODO
+
+    // operations
+    operationExplorer = new OperationExplorer(context);
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.Operation.Open', () => operationExplorer.OnOpenProject()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.Operation.Create', () => operationExplorer.OnCreateProject()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.Operation.Import', () => operationExplorer.OnImportProject()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.Operation.SetToolchainPath', () => operationExplorer.OnSetToolchainPath()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.Operation.SetupUtilTools', () => operationExplorer.setupUtilTools()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.Operation.openSettings', () => SettingManager.jumpToSettings('@ext:cl.eide')));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.Operation.onlineHelp', () => utility.openUrl('https://discuss.em-ide.com')));
+
+    // operations user cmds
+    subscriptions.push(vscode.commands.registerCommand('eide.operation.install_toolchain', () => operationExplorer.OnSetToolchainPath()));
+    subscriptions.push(vscode.commands.registerCommand('eide.operation.import_project', () => operationExplorer.OnImportProject()));
+    subscriptions.push(vscode.commands.registerCommand('eide.operation.new_project', () => operationExplorer.OnCreateProject()));
+    subscriptions.push(vscode.commands.registerCommand('eide.operation.open_project', () => operationExplorer.OnOpenProject()));
+
+    // projects
+    projectExplorer = new ProjectExplorer(context);
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.workspace.build', () => projectExplorer.buildWorkspace()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.workspace.rebuild', () => projectExplorer.buildWorkspace(true)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.workspace.open.config', () => projectExplorer.openWorkspaceConfig()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.workspace.make.template', (item) => projectExplorer.ExportProjectTemplate(undefined, true)));
+
+    // project user cmds
+    subscriptions.push(vscode.commands.registerCommand('eide.project.save', (item) => projectExplorer.saveProject(item)));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.rebuild', (item) => projectExplorer.buildProject(projectExplorer.getProjectByTreeItem(item))));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.build', (item) => projectExplorer.buildProject(projectExplorer.getProjectByTreeItem(item), { notRebuild: true })));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.clean', (item) => projectExplorer.cleanProject(projectExplorer.getProjectByTreeItem(item))));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.uploadToDevice', (item) => projectExplorer.programFlashProject(projectExplorer.getProjectByTreeItem(item))));
+    subscriptions.push(vscode.commands.registerCommand('eide.reinstall.binaries', () => checkAndInstallBinaries(true)));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.flash.erase.all', (item) => projectExplorer.programFlashProject(projectExplorer.getProjectByTreeItem(item), true)));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.buildAndFlash', (item) => projectExplorer.buildProject(projectExplorer.getProjectByTreeItem(item), { notRebuild: true, flashAfterBuild: true })));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.genBuilderParams', (item) => projectExplorer.buildProject(projectExplorer.getProjectByTreeItem(item), { notRebuild: true, onlyDumpBuilderParams: true })));
+    subscriptions.push(vscode.commands.registerCommand('eide.open.makelibs.cfg', (item) => projectExplorer.openLibsGeneratorConfig(item)));
+    subscriptions.push(vscode.commands.registerCommand('eide.project.create_sys_stubs', (projuid) => projectExplorer.createSysStubs(projuid)));
+
+    // operations bar
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.historyRecord', () => projectExplorer.openHistoryRecords()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.clearHistoryRecord', () => projectExplorer.clearAllHistoryRecords()));
+
+    // project
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showBuildParams', (item) => projectExplorer.buildProject(projectExplorer.getProjectByTreeItem(item), { onlyDumpCompilerInfo: true })));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.setActive', (item) => projectExplorer.setActiveProject(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.close', (item) => projectExplorer.Close(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.saveAll', () => projectExplorer.SaveAll()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.refresh', () => projectExplorer.Refresh()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.switchMode', (item) => projectExplorer.switchTarget(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.create', (item) => projectExplorer.onCreateTarget(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.rename', (item) => projectExplorer.onRenameTarget(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.duplicate', (item) => projectExplorer.onDuplicateTarget(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.delete', (item) => projectExplorer.onDeleteTarget(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.relocateRoot', (item) => projectExplorer.onRelocateProjectRoot(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportAsTemplate', (item) => projectExplorer.ExportProjectTemplate(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportXml', (item) => projectExplorer.ExportKeilXml(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportMakefile', (item) => projectExplorer.ExportMakefile(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.show_proj_vars', (item) => projectExplorer.ShowProjectVariables(item)));
+
+    // project explorer
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addSrcDir', (item) => projectExplorer.AddSrcDir(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeSrcDir', (item) => projectExplorer.RemoveSrcDir(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.sourceRoot.refresh', (item) => projectExplorer.refreshSrcRoot(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modify.files.options', (item) => projectExplorer.showFilesOptions(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.import.ext.source.struct', (item) => projectExplorer.ImportSourceFromExtProject(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.modify.exclude_list', (item) => projectExplorer.openYamlConfig(item, 'src-exc-cfg')));
+
+    // filesystem files
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.filesystem_folder_add_file', (item) => projectExplorer.fs_folderAddFile(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.filesystem_folder_add', (item) => projectExplorer.fs_folderAdd(item)));
+
+    // virtual files
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_add_file', (item) => projectExplorer.Virtual_folderAddFile(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_add', (item) => projectExplorer.Virtual_folderAdd(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_remove', (item, items) => projectExplorer.Virtual_removeFolder(item, items)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_rename', (item) => projectExplorer.Virtual_renameFolder(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_file_remove', (item, items) => projectExplorer.Virtual_removeFile(item, items)));
+
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.file.modify.extraArgs', (item) => projectExplorer.modifyExtraCompilerArgs('file', item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.file.compile', (item) => projectExplorer.compileSingleFile(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.folder.modify.extraArgs', (item) => projectExplorer.modifyExtraCompilerArgs('folder', item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.copyPath', (item) => projectExplorer.copyPath('abs', item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.copyRelativePath', (item) => projectExplorer.copyPath('relative', item)));
+
+    // file other operations
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeSource', (item, items) => projectExplorer.ExcludeSourceFile(item, items)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeSource', (item, items) => projectExplorer.UnexcludeSourceFile(item, items)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeFolder', (item, items) => projectExplorer.ExcludeFolder(item, items, false)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeFolder', (item, items) => projectExplorer.UnexcludeFolder(item, items, false)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeFolder.childSrcs', (item, items) => projectExplorer.ExcludeFolder(item, items, true)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeFolder.childSrcs', (item, items) => projectExplorer.UnexcludeFolder(item, items, true)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.file.show.dir', (item) => projectExplorer.showFileInExplorer(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.modify.path', (item) => projectExplorer.openYamlConfig(item, 'src-path-cfg')));
+
+    // package
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removePackage', (item) => projectExplorer.UninstallKeilPackage(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addPackage', (item) => projectExplorer.InstallKeilPackage(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.setDevice', (item) => projectExplorer.SetDevice(item.val.projectIndex)));
+    // - cmsis core packages
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.installCMSISHeaders', (item) => projectExplorer.installCmsisSourcePack(item, 'header')));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.installCmsisLibs', (item) => projectExplorer.installCmsisSourcePack(item, 'lib')));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.installCmsisDriverInterface', (item) => projectExplorer.installCmsisSourcePack(item, 'idrv')));
+
+    // builder
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyCompileConfig', (item) => projectExplorer.ModifyCompileConfig(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyCompileConfig.openFile', (item) => projectExplorer.ModifyCompileConfig_openFile(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.switchToolchain', (item) => projectExplorer.onSwitchCompileTools(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.setupToolchain', (item) => projectExplorer.onSetupToolchain(item)));
+
+    // flasher
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyUploadConfig', (item) => projectExplorer.ModifyUploadConfig(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.switchUploader', (item) => projectExplorer.switchUploader(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.fetchShellFlasher', (item) => projectExplorer.fetchShellFlasher(item)));
+
+    // debug cfg gen
+    subscriptions.push(vscode.commands.registerCommand(
+        '_cl.eide.project.genDebugConfigTemplate.jlink', (item) => projectExplorer.genDebugConfigTemplate(item, 'jlink')));
+    subscriptions.push(vscode.commands.registerCommand(
+        '_cl.eide.project.genDebugConfigTemplate.openocd', (item) => projectExplorer.genDebugConfigTemplate(item, 'openocd')));
+    subscriptions.push(vscode.commands.registerCommand(
+        '_cl.eide.project.genDebugConfigTemplate.pyocd', (item) => projectExplorer.genDebugConfigTemplate(item, 'pyocd')));
+
+    // project deps
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addIncludeDir', (item) => projectExplorer.AddIncludeDir(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addDefine', (item) => projectExplorer.AddDefine(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addLibDir', (item) => projectExplorer.AddLibDir(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showIncludeDir', (item) => projectExplorer.showIncludeDir(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showDefine', (item) => projectExplorer.showDefine(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showLibDir', (item) => projectExplorer.showLibDir(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyOtherSettings', (item) => projectExplorer.ModifyOtherSettings(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modify.deps', (item) => projectExplorer.openYamlConfig(item, 'prj-attr-cfg')));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.editDependenceItem', (item) => projectExplorer.editDependenceItem(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeDependenceItem', (item) => projectExplorer.RemoveDependenceItem(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.importDependenceFromPack', (item) => projectExplorer.ImportPackageDependence(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeDependenceFromPack', (item) => projectExplorer.RemovePackageDependence(item)));
+
+    // tree view global
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.copyItemValue', (item) => projectExplorer.CopyItemValue(item)));
+
+    // other project tools
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.show_disassembly', (url) => projectExplorer.showDisassembly(url)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.show_cmsis_config_wizard', (url) => projectExplorer.showCmsisConfigWizard(url)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.static-check.cppcheck', (item) => projectExplorer.cppcheckProject(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.static-check.clear', (item) => projectExplorer.clearCppcheckDiagnostic()));
+    //subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.cppcheck.check_file', (url) => projectExplorer.cppcheckFile(url)));
+
+    operationExplorer.on('request_open_project', (fsPath) => projectExplorer.emit('request_open_project', fsPath));
+    operationExplorer.on('request_create_project', (option) => projectExplorer.emit('request_create_project', option));
+    operationExplorer.on('request_create_from_template', (option) => projectExplorer.emit('request_create_from_template', option));
+    operationExplorer.on('request_import_project', (option) => projectExplorer.emit('request_import_project', option));
+
+    // status bar
+    //subscriptions.push(vscode.commands.registerCommand('_cl.eide.statusbar.switch-project', () => projectExplorer.showQuickPickAndSwitchActiveProject()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.statusbar.switch-target', () => projectExplorer.switchTarget()));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.statusbar.build', () => projectExplorer.buildProject(projectExplorer.getProjectByTreeItem(), { notRebuild: true })));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.statusbar.flash', () => projectExplorer.programFlashProject(projectExplorer.getProjectByTreeItem())));
+
+    // debug config providers
+    vscode.debug.registerDebugConfigurationProvider('cortex-debug', new ExternalDebugConfigProvider('cortex-debug'),
+        vscode.DebugConfigurationProviderTriggerKind.Dynamic);
+    vscode.debug.registerDebugConfigurationProvider('probe-rs-debug', new ExternalDebugConfigProvider('probe-rs-debug'),
+        vscode.DebugConfigurationProviderTriggerKind.Dynamic);
+    vscode.debug.registerDebugConfigurationProvider('gdbtarget', new ExternalDebugConfigProvider('gdbtarget'),
+        vscode.DebugConfigurationProviderTriggerKind.Dynamic);
+    // vscode.debug.registerDebugConfigurationProvider('stm8-debug', new ExternalDebugConfigProvider('stm8-debug'),
+    //     vscode.DebugConfigurationProviderTriggerKind.Dynamic);
+
+    // others
+    vscode.workspace.registerTextDocumentContentProvider(VirtualDocument.scheme, VirtualDocument.instance());
+    vscode.workspace.registerTaskProvider(EideTaskProvider.TASK_TYPE_BASH, new EideTaskProvider());
+    vscode.languages.registerCodeActionsProvider({ scheme: 'file', pattern: '**/compiler.log' }, 
+        new CompilerLogCodeActionProvider(), { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] });
+
+    // auto save project
+    projectExplorer.enableAutoSave(true);
+
+    // load project in this workspace
+    projectExplorer.loadWorkspace(context.globalState);
+
+    // hook
+    postLaunchHook(context);
+
+    // launch done
+    GlobalEvent.emit('extension_launch_done');
+    GlobalEvent.log_info('Embedded IDE launch done');
+}
+
+// this method is called when your extension is deactivated
+export function deactivate() {
+    projectExplorer.onDispose();
+    operationExplorer.onDispose();
+    ResManager.instance().onDispose();
+    LogDumper.getInstance().onDispose();
+    StatusBarManager.getInstance().disposeAll();
+    mcp.mcpServerStop().catch(err => GlobalEvent.log_error(err));
+}
+
+function postLaunchHook(extensionCtx: vscode.ExtensionContext) {
+
+    const settingManager = SettingManager.instance();
+    const resManager = ResManager.instance();
+    const appUsrData = resManager.getAppUsrData() || {};
+    const isFirstLaunch = appUsrData['InstallTime'] == undefined;
+
+    // is first launch ?
+    if (isFirstLaunch) {
+
+        // setup install time
+        resManager.setAppUsrData('InstallTime', Date.now());
+
+        // only enable github proxy for GMT+8:00 by default
+        const timeZone = Math.floor((new Date().getTimezoneOffset() / 60) * -1);
+        if (timeZone != 8) {
+            // disable settings: 'EIDE.Repository.UseProxy'
+            settingManager.setConfigValue('Repository.UseProxy', false);
+        }
+    }
+
+    // not first launch
+    else {
+
+        // fix type error for old version
+        if (typeof appUsrData['InstallTime'] === 'string') {
+            appUsrData['InstallTime'] = parseInt(appUsrData['InstallTime']) || 0;
+            resManager.setAppUsrData('InstallTime', appUsrData['InstallTime']);
+        }
+
+        // A few days ago, show feedback message
+        const some_days = 7 * utility.TIME_ONE_DAY;
+        if (!appUsrData['Feedbacked'] &&
+            Date.now() > appUsrData['InstallTime'] + some_days) {
+            resManager.setAppUsrData('Feedbacked', true);
+            const msg = view_str$prompt$feedback;
+            vscode.window.showInformationMessage(msg, rating_text, sponsor_author_text).then((ans) => {
+                if (ans == rating_text) {
+                    utility.openUrl(`https://marketplace.visualstudio.com/items?itemName=CL.eide&ssr=false#review-details`);
+                }
+                if (ans == sponsor_author_text) {
+                    // https://em-ide.com/sponsor
+                    utility.openUrl(`https://em-ide.com/sponsor`);
+                }
+            });
+        }
+    }
+
+    // refresh external tools now
+    ResInstaller.instance()
+        .refreshExternalToolsIndex()
+        .catch(err => GlobalEvent.log_warn(err));
+
+    // check py pkgs
+    checkAndInstallBuiltPyPkgs()
+        .catch(err => GlobalEvent.log_warn(err));
+
+    // MCP
+    if (settingManager.isMcpServerEnable()) {
+        const port = settingManager.getMcpServerPort();
+        try {
+            mcp.mcpServerInit(port, projectExplorer);
+            mcp.mcpServerStart(port, extensionCtx.extensionPath, extensionCtx.extension.packageJSON.version)
+                .catch(error => GlobalEvent.log_error(error));
+        } catch (error) {
+            GlobalEvent.log_error(error);
+        }
+    }
+}
+
+//////////////////////////////////////////////////
+// internal vsc-commands funcs
+//////////////////////////////////////////////////
+
+async function checkAndInstallBuiltPyPkgs() {
+
+    const resManager = ResManager.instance();
+    const py3 = resManager.getPython3();
+
+    // ---- for all platforms
+
+    const patchesDir = File.from(resManager.getAppDataDir().path, 'patches');
+
+    // memap patch
+    const memapPath = platform.osType() === 'win32' 
+        ? NodePath.join(NodePath.dirname(py3), 'Lib', 'site-packages', 'memap')
+        : NodePath.join(resManager.getLegacyBuilderDir().path, 'utils', 'memap');
+    if (File.IsDir(memapPath)) {
+        const patchVer = 2;
+        const patchFile = File.from(memapPath, '.patch');
+        let curVer = -1;
+        if (patchFile.IsFile())
+            curVer = parseInt(patchFile.Read().trim());
+        if (isNaN(curVer) || curVer < patchVer) {
+            const dstF = File.from(memapPath, '__main__.py');
+            const srcF = File.from(patchesDir.path, 'memap.py');
+            dstF.Write(srcF.Read());
+            patchFile.Write(patchVer.toString());
+        }
+    }
+
+    // ---- only for Win32
+
+    if (platform.osType() != 'win32')
+        return;
+
+    // python3 builtin pkg patch
+    const usrData = resManager.getAppUsrData() || {};
+    const wantedVer = 1;
+    if (usrData['python3_pkg_patch_ver'] !== wantedVer) {
+        const curVer = usrData['python3_pkg_patch_ver'] || '';
+        try {
+            if (!curVer) {
+                GlobalEvent.log_info(`reinstall jinja2`);
+                ChildProcess.execFileSync(py3, ['-m', 'pip', 'uninstall', '-y', 'jinja2']);
+                ChildProcess.execFileSync(py3, ['-m', 'pip', '--no-cache-dir', 'install', './Jinja2-2.11.3-py2.py3-none-any.whl'], {
+                    cwd: resManager.GetAppDataDir().path
+                });
+            }
+            GlobalEvent.log_info(`builtin pkg patch done.`);
+            resManager.setAppUsrData('python3_pkg_patch_ver', wantedVer);
+        } catch (error) {
+            GlobalEvent.log_error(error);
+        }
+    }
+
+    const builtin_pkgs: { [name: string]: string } = {
+        'pyserial': 'pyserial-3.5-py2.py3-none-any.whl'
+    };
+
+    for (const name in builtin_pkgs) {
+        // check:
+        //  .\python3.exe -m pip show intelhex
+        ChildProcess.exec(`"${py3}" -m pip show ${name}`, (err, stdout) => {
+            if (!err) {
+                const lines = stdout.split(/\r\n|\n/);
+                const installed = lines.some(line => /^Version:\s+/.test(line));
+                if (installed)
+                    return;
+            }
+            // install
+            //  .\python3 -m pip --no-cache-dir install %*
+            GlobalEvent.log_info(`Installing python package: ${builtin_pkgs[name]} ...`);
+            const pkgFullPath = NodePath.join(resManager.getAppDataDir().path, builtin_pkgs[name]);
+            ChildProcess.exec(`"${py3}" -m pip install "${pkgFullPath}"`, (err) => {
+                if (!err) {
+                    GlobalEvent.log_info(`Done.`);
+                } else {
+                    GlobalEvent.log_warn(`Fail to install python package: ${builtin_pkgs[name]}`);
+                    GlobalEvent.log_warn(err);
+                }
+            });
+        });
+    }
+}
+
+function ShowUUID() {
+    vscode.window.showInputBox({
+        value: platform.GetUUID()
+    });
+}
+
+function reloadJlinkDevices() {
+    if (ResManager.GetInstance().loadJlinkDevList()) {
+        GlobalEvent.emit('msg', newMessage('Info', 'Done !, JLink devices list has been reloaded !'));
+    }
+}
+
+function reloadStm8Devices() {
+    if (ResManager.GetInstance().loadStm8DevList()) {
+        GlobalEvent.emit('msg', newMessage('Info', 'Done !, STM8 devices list has been reloaded !'));
+    }
+}
+
+async function newClangFormatFile() {
+
+    let root = WorkspaceManager.getInstance().getWorkspaceRoot();
+    if (!root) {
+        const li = WorkspaceManager.getInstance().getWorkspaceList();
+        if (li.length > 0) {
+            root = li[0];
+        }
+    }
+
+    if (root) {
+        const fSrc = File.fromArray([ResManager.GetInstance().GetAppDataDir().path, '.clang-format']);
+        fs.copyFileSync(fSrc.path, [root.path, '.clang-format'].join(File.sep));
+        vscode.window.showInformationMessage(`.clang-format file was created in '${fSrc.dir}' !`);
+    } else {
+        vscode.window.showWarningMessage(`No opened workspace or folders !`);
+    }
+}
+
+function cleanCache() {
+    try {
+        platform.DeleteAllChildren(ResManager.instance().GetTmpDir());
+        GlobalEvent.emit('msg', newMessage('Info', 'Done.'));
+    } catch (error) {
+        GlobalEvent.log_error(error);
+    }
+}
+
+//////////////////////////////////////////////////
+// eide binaries installer
+//////////////////////////////////////////////////
+
+function checkBinFolder(binFolder: File): boolean {
+    return binFolder.IsDir() &&
+        File.fromArray([binFolder.path, 'VERSION']).IsFile();
+}
+
+async function checkAndInstallBinaries(forceInstall?: boolean): Promise<boolean> {
+
+    const resManager = ResManager.GetInstance();
+
+    const binFolder = resManager.getBinDir();
+    const eideCfg = resManager.getAppConfig<any>();
+    const minReqVersion = eideCfg['binary_min_version'];
+
+    // !! for compatibility with offline-package !!
+    // if we found eide binaries in plug-in root folder, move it 
+    const builtInBinFolder = File.fromArray([resManager.getAppRootFolder().path, 'bin'])
+    if (checkBinFolder(builtInBinFolder)) {
+        if (os.platform() == 'win32') {
+            ChildProcess.execSync(`xcopy "${builtInBinFolder.path}" "${binFolder.path}\\" /H /E /Y`);
+            platform.DeleteDir(builtInBinFolder); // rm it after copy done ! 
+        } else {
+            platform.DeleteDir(binFolder); // rm existed folder
+            ChildProcess.execSync(`mv -f "${builtInBinFolder.path}" "${binFolder.dir}/"`);
+        }
+    }
+
+    /* check eide binaries */
+
+    // force reinstall
+    if (forceInstall) {
+        return await tryUpdateBinaries(binFolder, undefined);
+    }
+
+    // if binaries is installed, we need check binaries's version
+    else if (checkBinFolder(binFolder)) {
+
+        let localVersion: string | undefined;
+
+        // get local binary version from disk
+        // check binaries Main_Ver (<Main_Ver>.xx.xx <=> <Main_Ver>.xx.xx)
+        const verFile = File.fromArray([binFolder.path, 'VERSION']);
+        if (verFile.IsFile()) {
+            const cont = verFile.Read().trim();
+            if (utility.isVersionString(cont)) {
+                localVersion = cont;
+                const mainLocalVersion = parseInt(localVersion.split('.')[0]);
+                const mainMinReqVersion = parseInt(minReqVersion.split('.')[0]);
+                if (mainMinReqVersion != mainLocalVersion) { // local Main verson != min Main version
+                    localVersion = undefined; // local binaries is invalid, force update
+                }
+            }
+        }
+
+        // try fetch update after 5sec delay
+        if (localVersion) {
+            setTimeout(async (curLocalVersion: string) => {
+                const appUsrData = resManager.getAppUsrData() || {};
+                const lastCheckUpdateTime: number = appUsrData['LastCheckBinariesUpdateTime'] || 0;
+                if (Date.now() > lastCheckUpdateTime + (6 * utility.TIME_ONE_HOUR)) {
+                    const done = await tryUpdateBinaries(binFolder, curLocalVersion); // no prompt
+                    if (done) {
+                        resManager.setAppUsrData('LastCheckBinariesUpdateTime', Date.now());
+                    } else {
+                        const msg = `Update eide-binaries failed, please restart vscode to try again !`;
+                        const sel = await vscode.window.showErrorMessage(msg, 'Restart', 'Cancel');
+                        if (sel == 'Restart') {
+                            vscode.commands.executeCommand('workbench.action.reloadWindow');
+                        }
+                    }
+                }
+            }, 5 * 1000, localVersion);
+        }
+
+        // binaries folder is existed, but can not get local binaries version, 
+        // the binaries maybe damaged, we need to force reinstall it
+        else {
+            platform.DeleteDir(binFolder); // del existed folder
+            return await tryUpdateBinaries(binFolder, undefined);
+        }
+
+        // export current binaries version
+        if (localVersion) {
+            process.env['EIDE_BINARIES_VER'] = localVersion;
+        }
+
+        // clean legacy builder/bin folder
+        cleanLegacyUnifyBuilder();
+
+        return true;
+    }
+
+    // not found binaries folder, install it
+    return await tryUpdateBinaries(binFolder, undefined);
+}
+
+/**
+ * @param localVer 当前本地的版本号，通过比对版本号决定是否执行安装，如果为 undefined 则强制安装
+*/
+async function tryUpdateBinaries(binFolder: File, localVer?: string): Promise<boolean> {
+
+    const eideCfg = ResManager.GetInstance().getAppConfig<any>();
+    const minReqVersion = eideCfg['binary_min_version'];
+
+    const getVersionFromRepo = async (): Promise<string | Error | undefined> => {
+        try {
+            const url = `https://api.github.com/repos/github0null/eide-resource/contents/binaries/${platform.getRuntimeId()}/VERSION`;
+            const cont = await utility.requestTxt(utility.redirectHost(url));
+            if (typeof cont != 'string') return cont;
+            let obj: any = undefined;
+            try { obj = JSON.parse(cont); } catch (error) { return error; }
+            if (typeof obj.content != 'string') return obj.content;
+            return Buffer.from(obj.content, 'base64').toString();
+        } catch (error) {
+            return error;
+        }
+    };
+
+    const getAvailableBinariesVersions = async (): Promise<string[] | Error | undefined> => {
+        try {
+            const url = `https://api.github.com/repos/github0null/eide-resource/contents/binaries/${platform.getRuntimeId()}`;
+            const fList = await utility.readGithubRepoFolder(utility.redirectHost(url));
+            if (fList instanceof Error) throw fList;
+            return fList.filter(f => f.name.startsWith('bin-'))
+                .map(f => f.name.replace('bin-', '').replace('.7z', ''))
+                .filter(vStr => utility.isVersionString(vStr));
+        } catch (error) {
+            return error;
+        }
+    };
+
+    let preinstallVersion: string | undefined;
+
+    // compare version if local version is available
+    if (localVer) {
+        const newVersion = await getVersionFromRepo();
+        if (typeof newVersion == 'string') {
+            const remotVer = newVersion.trim();
+            if (utility.isVersionString(remotVer)) {
+                const localMainVer: string = localVer.split('.')[0];
+                const remotMainVer: string = remotVer.split('.')[0];
+                if (localMainVer == remotMainVer && // main version number must be equal
+                    utility.compareVersion(remotVer, localVer) > 0) { // remote version > local version ?
+                    preinstallVersion = remotVer; // local binaries need update
+                }
+            }
+        }
+    }
+
+    // can not match version, get version list from repo
+    // select the latest version for min version requirment
+    else {
+        const vList = await getAvailableBinariesVersions();
+        if (vList && Array.isArray(vList)) {
+            const minMainVer: string = minReqVersion.split('.')[0];
+            const validVerList = vList.filter(ver => ver.split('.')[0] == minMainVer);
+            if (validVerList.length > 0) {
+                preinstallVersion = validVerList[0];
+                for (const ver of validVerList) {
+                    if (utility.compareVersion(ver, preinstallVersion) > 0) {
+                        preinstallVersion = ver;
+                    }
+                }
+            }
+        }
+    }
+
+    // check version
+    if (localVer) { // binaries is installed, found local version
+        if (preinstallVersion == undefined) {
+            return true; // local version is latested, not need update
+        }
+    } else { // binaries is not installed
+        if (preinstallVersion == undefined) {
+            const err = new Error(`Can not fetch binaries version from remote github repo (binaries minimum version required: '${minReqVersion}'), Check your network and retry !`);
+            GlobalEvent.emit('error', err);
+            return false;
+        }
+    }
+
+    // check bin folder
+    // show notify to user and request a confirm
+    if (checkBinFolder(binFolder) && preinstallVersion) {
+        //TODO
+        // if (!notConfirm) {
+        //     const msg = `New update for eide binaries, version: '${preinstallVersion}', [ChangeLog](https://github.com/github0null/eide-resource/pulls?q=is%3Apr+is%3Aclosed), install now ?`;
+        //     const sel = await vscode.window.showInformationMessage(msg, 'Yes', 'Later');
+        //     if (sel != 'Yes') { return true; } // user canceled
+        // }
+    }
+
+    return await tryInstallBinaries(binFolder, preinstallVersion);
+}
+
+async function tryInstallBinaries(binFolder: File, binVersion: string): Promise<boolean> {
+
+    // zip type
+    const binType = '7z';
+
+    // binaries download site
+    let downloadSites: string[] = [
+        `https://raw-github.em-ide.com/github0null/eide-resource/master/binaries/${platform.getRuntimeId()}/bin-${binVersion}.${binType}`,
+        `https://raw.githubusercontent.com/github0null/eide-resource/master/binaries/${platform.getRuntimeId()}/bin-${binVersion}.${binType}`
+    ];
+
+    // random order
+    {
+        const sValMap: Map<string, number> = new Map();
+        downloadSites.forEach(s => sValMap.set(s, Math.floor(Math.random() * 100)));
+        downloadSites = downloadSites.sort((a, b) => (sValMap.get(a) || 0) - (sValMap.get(b) || 0));
+    }
+
+    let installedDone = false;
+
+    try {
+        const tmpFile = File.fromArray([os.tmpdir(), `eide-binaries-${binVersion}.${binType}`]);
+
+        const done = await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Downloading eide binaries',
+            cancellable: false
+        }, async (progress, token): Promise<boolean> => {
+
+            let res: Buffer | undefined | Error = undefined;
+
+            for (const site of downloadSites) {
+                res = await utility.downloadFileWithProgress(site, tmpFile.name, progress, token);
+                if (res instanceof Buffer) { break; } /* if done, exit loop */
+                progress.report({ message: 'failed, switch to next download site ...' });
+            }
+
+            if (res instanceof Error) { /* download failed */
+                GlobalEvent.emit('msg', ExceptionToMessage(res, 'Warning'));
+                return false;
+            } else if (res == undefined) { /* canceled */
+                return false;
+            }
+
+            /* save to file */
+            fs.writeFileSync(tmpFile.path, res);
+
+            return true;
+        });
+
+        /* download done, unzip and install it */
+        if (done) {
+
+            installedDone = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Installing eide binaries`,
+                cancellable: false
+            }, async (progress, __): Promise<boolean> => {
+
+                return new Promise((resolve_) => {
+
+                    let resolved = false;
+                    const resolveIf = (data: boolean) => {
+                        if (!resolved) {
+                            resolved = true;
+                            resolve_(data);
+                        }
+                    };
+
+                    let prevPercent: number = 0;
+
+                    // del old binaries
+                    if (binFolder.IsDir()) {
+                        progress.report({ message: `Cleanup old files ...` });
+                        platform.DeleteAllChildren(binFolder);
+                    }
+
+                    // make dir
+                    binFolder.CreateDir(true);
+
+                    // start unzip
+                    node7z.extractFull(tmpFile.path, binFolder.path, {
+                        $bin: ResManager.GetInstance().Get7za().path,
+                        $progress: true,
+                        recursive: true
+                    })
+                        // unzip done
+                        .on('end', () => {
+                            progress.report({ message: `Install eide binaries done !` });
+                            setTimeout(() => resolveIf(true), 500);
+                        })
+
+                        // unzip error
+                        .on('error', (err) => {
+                            GlobalEvent.emit('error', err);
+                            resolveIf(false);
+                        })
+
+                        // progress
+                        .on('progress', (info) => {
+                            prevPercent = info.percent;
+                        })
+
+                        // file info
+                        .on('data', (data) => {
+                            progress.report({ message: `${prevPercent}%, in '${data.file}'` });
+                        });
+                });
+            });
+        }
+
+        /* del tmp file */
+        if (tmpFile.IsFile()) {
+            try { fs.unlinkSync(tmpFile.path) } catch (error) { }
+        }
+
+    } catch (error) {
+        GlobalEvent.emit('error', error);
+    }
+
+    /* clear dir if failed */
+    if (!installedDone) {
+        platform.DeleteDir(binFolder);
+    }
+
+    if (installedDone) {
+        onBinariesInstallDone();
+    }
+
+    return installedDone;
+}
+
+function onBinariesInstallDone() {
+
+    const resManager = ResManager.GetInstance();
+
+    // chmod +x for other executable files
+    if (os.platform() != 'win32') {
+
+        const exeLi: string[] = [];
+
+        // get exe file list from folders
+        for (const dir of [
+            File.fromArray([resManager.getBinDir().path, 'scripts']),
+            File.fromArray([resManager.getLegacyBuilderDir().path, 'utils'])
+        ]) {
+            dir.GetList(undefined, File.EXCLUDE_ALL_FILTER)
+                .forEach((f) => {
+                    if (!f.suffix) { // nosuffix file is an exe file
+                        exeLi.push(f.path);
+                    }
+                });
+        }
+
+        if (exeLi.length > 0)
+            GlobalEvent.emit('globalLog.append', 'Setup binaries permissions -> ' + os.EOL);
+
+        for (const path of exeLi) {
+            try {
+                const cmd = `chmod +x "${path}"`;
+                GlobalEvent.emit('globalLog.append', cmd + os.EOL);
+                ChildProcess.execSync(cmd);
+            } catch (error) {
+                GlobalEvent.log_error(error);
+                GlobalEvent.emit('globalLog.show');
+            }
+        }
+    }
+
+    // delete legacy builder dir
+    cleanLegacyUnifyBuilder();
+}
+
+function cleanLegacyUnifyBuilder() {
+    const resManager = ResManager.GetInstance();
+    const legacyDir = File.fromArray([resManager.getLegacyBuilderDir().path, 'bin']);
+    if (legacyDir.IsDir()) {
+        platform.DeleteDir(legacyDir);
+    }
+}
+
+async function patchBinaries() {
+}
+
+//////////////////////////////////////////////////
+// environment sutup
+//////////////////////////////////////////////////
+
+let isEnvSetuped: boolean = false;
+
+function exportEnvToSysPath(context?: vscode.ExtensionContext) {
+
+    const settingManager = SettingManager.GetInstance();
+    const resManager = ResManager.GetInstance();
+    const legacyBuilderDir = resManager.getLegacyBuilderDir();
+
+    // export some eide binaries path to system env path
+    const prependSystemPaths: string[] = [
+        File.normalize(`${resManager.getUnifyBuilderExe().dir}`),
+        File.normalize(`${legacyBuilderDir.path}/utils`),  // C:\Users\<USER-NAME>\.eide\bin\builder\utils
+        File.normalize(`${legacyBuilderDir.dir}/scripts`), // C:\Users\<USER-NAME>\.eide\bin\scripts
+        File.normalize(`${resManager.Get7zDir().path}`),   // builtin 7za tool
+        File.normalize(`${resManager.getBuiltInToolsDir().path}/utils`) // builtin util tools
+    ];
+
+    // create ~/.eide/tools dir
+    const eideToolsFolder = new File(File.normalize(`${platform.userhome()}/.eide/tools`));
+    if (!eideToolsFolder.IsDir()) {
+        try {
+            new File(eideToolsFolder.path).CreateDir(true);
+        } catch (error) {
+            // nothing todo
+        }
+    }
+
+    // export def tools path to system env path from extension setting
+    const pathList: { key: string, path: string, extraPath?: string[] }[] = [];
+
+    // try to export some user setted tools path to env
+    [
+        { key: 'EIDE_TOOL_GCC_ARM', path: `${settingManager.getGCCDir().path}${File.sep}bin` },
+        { key: 'EIDE_TOOL_JLINK', path: `${settingManager.getJlinkDir()}` },
+        { key: 'EIDE_TOOL_OPENOCD', path: `${NodePath.dirname(settingManager.getOpenOCDExePath())}` }
+    ].forEach(o => {
+        if (File.IsDir(o.path)) {
+            pathList.push(o);
+        }
+    });
+
+    // search tools folder and export path to system env
+    eideToolsFolder.GetList(File.EXCLUDE_ALL_FILTER).forEach((subDir) => {
+
+        if (!/^\w+$/.test(subDir.name)) return; // filter dir name
+
+        let binFolderPaths: string[] = [];
+
+        // try get path from 'BIN_PATH' file
+        const BIN_PATH_FILE = File.fromArray([subDir.path, 'BIN_PATH']);
+        if (BIN_PATH_FILE.IsFile()) {
+
+            let binDirs: string[] = [];
+            try {
+                binDirs = BIN_PATH_FILE.Read().split(/\r\n|\n/)
+                    .map(s => s.trim())
+                    .filter(s => s != '');
+            } catch (error) {
+                GlobalEvent.log_warn(error);
+            }
+
+            binDirs.forEach(dir => {
+                const binFolder = File.normalize(`${subDir.path}/${dir}`);
+                if (File.IsDir(binFolder)) {
+                    binFolderPaths.push(binFolder);
+                }
+            });
+        }
+
+        // try use ./bin
+        if (binFolderPaths.length == 0) {
+            const binFolder = File.normalize(`${subDir.path}/bin`);
+            if (File.IsDir(binFolder)) {
+                binFolderPaths.push(binFolder);
+            }
+        }
+
+        // export bin folder if we found
+        if (binFolderPaths.length > 0) {
+            const keyName = `EIDE_TOOL_${subDir.name.toUpperCase()}`;
+            if (pathList.findIndex(o => o.key == keyName) != -1) return; // skip repeat key name
+            pathList.push({
+                key: keyName,
+                path: binFolderPaths[0],
+                extraPath: binFolderPaths.length > 1 ? binFolderPaths.slice(1) : undefined
+            });
+        }
+    });
+
+    // search built-in tools and export path to system env
+    legacyBuilderDir.GetList(File.EXCLUDE_ALL_FILTER).forEach((subDir) => {
+        const binFolder = File.normalize(`${subDir.path}/bin`);
+        if (File.IsDir(binFolder)) {
+            const key_name = `EIDE_${subDir.name.toUpperCase()}`;
+            // check msys is enabled
+            if (key_name == 'EIDE_MSYS' && !settingManager.isEnableMsys())
+                return;
+            pathList.push({
+                key: key_name,
+                path: binFolder
+            });
+        }
+    });
+
+    // prepend/append all tools to system env paths
+    pathList
+        .filter((env) => File.IsDir(env.path))
+        .forEach(envInfo => {
+            prependSystemPaths.push(envInfo.path);
+            if (envInfo.extraPath) {
+                envInfo.extraPath.forEach(p => prependSystemPaths.push(p));
+            }
+        });
+
+    /* append to System Path if we not */
+    if (isEnvSetuped == false) {
+        isEnvSetuped = true;
+        platform.prependToSysEnv(process.env, prependSystemPaths);
+    }
+
+    /* update env key value */
+    for (const env of pathList) {
+        if (File.IsDir(env.path)) {
+            process.env[env.key] = env.path;
+        } else {
+            process.env[env.key] = '';
+        }
+    }
+
+    /* setup python3 cmd */
+    process.env['EIDE_PY3_CMD'] = resManager.getPython3();
+
+    // .NET 工具会收集用法数据，帮助我们改善你的体验。它由 Microsoft 收集并与社区共享。
+    // 你可通过使用喜欢的 shell 将 DOTNET_CLI_TELEMETRY_OPTOUT 环境变量设置为 "1" 或 "true" 来选择退出遥测。
+    // 阅读有关 .NET CLI 工具遥测的更多信息: https://aka.ms/dotnet-cli-telemetry
+    process.env['DOTNET_CLI_TELEMETRY_OPTOUT'] = '1'; // disable telemetry
+    // 支持运行时回滚
+    // https://learn.microsoft.com/zh-cn/dotnet/core/whats-new/dotnet-core-3-0#major-version-runtime-roll-forward
+    process.env['DOTNET_ROLL_FORWARD'] = 'Major';
+
+    SettingManager.GetInstance().syncGlobalEnvVariablesToNodeEnv();
+}
+
+async function checkAndInstallRuntime() {
+
+    const dotnet_chk_cmd = `dotnet --list-runtimes`;
+
+    //
+    // if not found dotnet, preset dotnet root folder into system env
+    // dotnet path: 'C:\Program Files\dotnet'
+    //
+    if (os.platform() == 'win32') {
+        try {
+            ChildProcess.execSync(dotnet_chk_cmd);
+        } catch (error) {
+            if (platform.osType() == 'win32') {
+                platform.appendToSysEnv(process.env, ['C:\\Program Files\\dotnet']);        // for win x64
+                platform.appendToSysEnv(process.env, ['C:\\Program Files (x86)\\dotnet']);  // for win x86
+            }
+        }
+    }
+
+    //
+    // check/install .NET
+    //
+    try {
+        GlobalEvent.log_info('Checking .NET runtime ...');
+        GlobalEvent.log_info(`Exec cmd: '${dotnet_chk_cmd}'`);
+        const dotnetInfo = ChildProcess.execSync(dotnet_chk_cmd).toString().trim();
+        GlobalEvent.emit('globalLog.append', dotnetInfo + os.EOL);
+        // check dotnet version
+        let dotnetVerLine: string | undefined;
+        const lines = dotnetInfo.trim().split(/\r\n|\n/);
+        for (const line_ of lines) {
+            const line = line_.trim();
+            const m = /Microsoft\.NETCore\.App (\d+)\./i.exec(line);
+            if (m && m.length > 1) {
+                const rt_ver = parseInt(m[1]);
+                if (rt_ver >= 6) {
+                    dotnetVerLine = line;
+                    GlobalEvent.log_info(`.NET runtime: '${dotnetVerLine}' found !`);
+                    break;
+                }
+            }
+        }
+        if (!dotnetVerLine) {
+            throw new Error(`Not found available .NET Core runtime`);
+        }
+    } catch (error) {
+
+        GlobalEvent.log_error(error);
+
+        GlobalEvent.emit('globalLog.show'); // show error log for user
+        GlobalEvent.log_info('Not found [.NET6 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/6.0) !');
+
+        /* @deprecated
+        const msg = `Not found [.NET6 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/6.0), please install it !`;
+        const sel = await vscode.window.showWarningMessage(msg, txt_install_now);
+        if (!sel) { return } // user canceled */
+
+        // for other platform, user need install it manually
+        if (os.platform() != 'win32') {
+            const msg = `Not found [.NET6 runtime](https://dotnet.microsoft.com/en-us/download/dotnet/6.0) on your pc, please install it !`;
+            vscode.window.showWarningMessage(msg);
+            // https://dotnet.microsoft.com/en-us/download/dotnet/scripts
+            // utility.openUrl(`https://dotnet.microsoft.com/en-us/download/dotnet/scripts`);
+        }
+
+        // win32, we can auto install it
+        else {
+            const defPkgName = 'dotnet-runtime-6.0.5-win-x64.exe';
+
+            let pkgReady: boolean = false;
+            let pkgFile: File;
+
+            // if found local installer pkg, use it
+            const localPkg = File.fromArray([ResManager.GetInstance().getAppRootFolder().path, defPkgName]);
+            if (localPkg.IsFile()) {
+                pkgReady = true;
+                pkgFile = localPkg;
+            }
+
+            // if not found local installer pkg, download it
+            else {
+
+                pkgFile = File.fromArray([os.tmpdir(), defPkgName]);
+                if (pkgFile.IsFile()) { // if we have a cached old file, check it
+                    const sevenZip = utility.newSevenZipperInstance();
+                    const pkgSha256 = sevenZip.sha256(pkgFile);
+                    const reqSha256 = 'A085714B879DC1CB85538109640E22A2CBFF2B91195DF540A5F98AEA09AF2C1E'.toLowerCase();
+                    if (pkgSha256 == reqSha256) { pkgReady = true; } // sha256 verified, use cached old file
+                    else { try { fs.unlinkSync(pkgFile.path); } catch { } } // sha256 verify failed, del old file
+                }
+
+                if (!pkgReady) { // if no cached pkg, download it
+
+                    const downloadUrl = `https://download.visualstudio.microsoft.com/download/pr/b395fa18-c53b-4f7f-bf91-6b2d3c43fedb/d83a318111da9e15f5ecebfd2d190e89/dotnet-runtime-6.0.5-win-x64.exe`;
+
+                    pkgReady = await vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: 'Downloading .NET6 runtime installer',
+                        cancellable: false
+                    }, async (progress, token): Promise<boolean> => {
+
+                        const res = await utility.downloadFileWithProgress(downloadUrl, pkgFile.name, progress, token);
+
+                        if (res instanceof Buffer) {
+                            try {
+                                fs.writeFileSync(pkgFile.path, res);
+                                return true;
+                            } catch (error) {
+                                return false;
+                            }
+                        }
+
+                        if (res instanceof Error) {
+                            GlobalEvent.emit('error', res);
+                        }
+
+                        return false;
+                    });
+                }
+            }
+
+            if (pkgReady && pkgFile.IsFile()) {
+                try {
+                    ChildProcess.execFileSync(pkgFile.path);
+                    vscode.window.showInformationMessage(view_str$prompt$install_dotnet_and_restart_vscode);
+                } catch (error) {
+                    GlobalEvent.emit('msg', newMessage('Error', view_str$prompt$install_dotnet_failed));
+                }
+            } else {
+                vscode.window.showWarningMessage(`Install .NET6 runtime failed, you need install it manually !`);
+                // https://dotnet.microsoft.com/en-us/download/dotnet/scripts
+                // https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-6.0.5-windows-x64-installer
+                utility.openUrl(`https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-6.0.5-windows-x64-installer`);
+            }
+        }
+    }
+}
+
+async function InitComponents(context: vscode.ExtensionContext): Promise<boolean | undefined> {
+
+    // init managers
+    const resManager = ResManager.GetInstance(context);
+    const settingManager = SettingManager.GetInstance(context);
+
+    LogDumper.getInstance();
+
+    // set exec permission for built-in tools
+    if (os.platform() != 'win32') {
+
+        const exelist: string[] = [
+            resManager.Get7za().path,
+        ];
+
+        new File(resManager.getUnifyBuilderExe().dir)
+            .GetList(undefined, File.EXCLUDE_ALL_FILTER)
+            .forEach((f) => {
+                if (!f.suffix) { // nosuffix file is an exe file
+                    exelist.push(f.path);
+                }
+            });
+
+        try {
+            for (const exePath of exelist) {
+                try {
+                    fs.accessSync(exePath, fs.constants.R_OK | fs.constants.X_OK);
+                } catch (error) {
+                    const cmd = `chmod +x "${exePath}"`;
+                    GlobalEvent.emit('globalLog.append', cmd + os.EOL);
+                    ChildProcess.execSync(cmd);
+                }
+            }
+        } catch (error) {
+            GlobalEvent.log_error(error);
+            GlobalEvent.emit('globalLog.show');
+        }
+    }
+
+    /* check binaries, if not found, install it ! */
+    const done = await checkAndInstallBinaries();
+    if (!done) { return false; } /* exit if failed */
+
+    // binaries patchs
+    await patchBinaries();
+
+    // check and install .NET6 runtime
+    await checkAndInstallRuntime();
+
+    // register telemetry hook if user enabled
+    try {
+        if (settingManager.isEnableTelemetry()) {
+            const TelemetryTask = require('./Private/TelemetryTask');
+            TelemetryTask.registerTelemetryHook();
+        }
+    } catch (error) {
+        // ignore error
+    }
+
+    // set some toolpath to env
+    exportEnvToSysPath(context);
+
+    // init status bar
+    {
+        const statusBarManager = StatusBarManager.getInstance();
+
+        const bar_proj = statusBarManager.create('project');
+        const bar_make = statusBarManager.create('build');
+        const bar_flash = statusBarManager.create('flash');
+
+        bar_proj.text    = `EIDE Project: unspecified`;
+        bar_proj.command = `_cl.eide.statusbar.switch-target`;
+        bar_proj.tooltip = `Switch target for eide project`;
+
+        bar_make.text    = `$(tools) Build`;
+        bar_make.command = `_cl.eide.statusbar.build`;
+        bar_make.tooltip = `Build eide project`;
+
+        bar_flash.text    = `$(arrow-down) Flash`;
+        bar_flash.command = `_cl.eide.statusbar.flash`;
+        bar_flash.tooltip = `Upload binary file to device`;
+    }
+
+    // register bash profile for windows
+    if (os.platform() == 'win32') {
+        context.subscriptions.push(vscode.window.registerTerminalProfileProvider(EideTerminalProvider.UNIX_BASH_ID,
+            new EideTerminalProvider(EideTerminalProvider.UNIX_BASH_ID)));
+    }
+
+    context.subscriptions.push(
+        vscode.window.registerTerminalProfileProvider(EideTerminalProvider.SYSTEM_SHELL_ID,
+            new EideTerminalProvider(EideTerminalProvider.SYSTEM_SHELL_ID)));
+
+    // update onchanged
+    settingManager.on('onChanged', (e) => {
+
+        /* set some toolpath to env when path is changed */
+        if (e.affectsConfiguration('EIDE.ARM.GCC.InstallDirectory') ||
+            e.affectsConfiguration('EIDE.JLink.InstallDirectory') ||
+            e.affectsConfiguration('EIDE.OpenOCD.ExePath')) {
+            exportEnvToSysPath();
+        }
+    });
+
+    // register custom editor provider
+    context.subscriptions.push(
+        vscode.window.registerCustomEditorProvider('cl.eide.map.view',
+            new MapViewEditorProvider(), { webviewOptions: { enableFindWidget: true } }));
+
+    // terminal link providers
+    context.subscriptions.push(
+        vscode.window.registerTerminalLinkProvider(new EideTerminalLinkProvider()));
+
+    return true;
+}
+
+function RegisterMsgListener() {
+    LogAnalyzer.on('Error', (msg) => vscode.window.showErrorMessage((msg.title ? msg.title : ERROR) + ' : ' + msg.text));
+    LogAnalyzer.on('Warning', (msg) => vscode.window.showWarningMessage((msg.title ? msg.title : WARNING) + ' : ' + msg.text));
+    LogAnalyzer.on('Info', (msg) => vscode.window.showInformationMessage((msg.title ? msg.title : INFORMATION) + ' : ' + msg.text));
+}
+
+let prj_count: number = 0;
+
+function RegisterGlobalEvent() {
+
+    LogAnalyzer.on('Log', (msg) => {
+        // no workspace, log to output panel
+        if (LogAnalyzer.GetInstance().getLogListenerCount() < 2) {
+            GlobalEvent.emit('globalLog', msg);
+        }
+    });
+
+    const outChannel = vscode.window.createOutputChannel('eide-log');
+    GlobalEvent.on('globalLog', (msg) => outChannel.appendLine(LogDumper.Msg2String(msg)));
+    GlobalEvent.on('globalLog.append', (log) => outChannel.append(log));
+    GlobalEvent.on('globalLog.show', () => outChannel.show());
+
+    GlobalEvent.on('project.opened', () => {
+        prj_count++; // increment cnt
+        vscode.commands.executeCommand('setContext', 'cl.eide.projectActived', true);
+        vscode.commands.executeCommand('setContext', 'cl.eide.enable.active', prj_count > 1);
+    });
+
+    GlobalEvent.on('project.closed', () => {
+        prj_count--; // reduce cnt
+        vscode.commands.executeCommand('setContext', 'cl.eide.projectActived', prj_count != 0);
+        vscode.commands.executeCommand('setContext', 'cl.eide.enable.active', prj_count > 1);
+    });
+
+    // for status bar
+    GlobalEvent.on('project.opened', () => {
+        if (prj_count == 1) {
+            StatusBarManager.getInstance().foreach((bar, name) => {
+                bar.show();
+            })
+        }
+    });
+
+    GlobalEvent.on('project.closed', () => {
+        if (prj_count == 0) {
+            StatusBarManager.getInstance().foreach((bar, name) => {
+                bar.hide();
+            })
+        }
+    });
+}
+
+////////////////////////////////////////////
+// --- task provider
+////////////////////////////////////////////
+
+interface EideShellTaskDef extends vscode.TaskDefinition {
+
+    label: string;
+
+    name?: string;
+
+    command: string;
+
+    options?: {
+        cwd?: string;
+    };
+
+    env?: { [key: string]: string }
+}
+
+class EideTaskProvider implements vscode.TaskProvider {
+
+    public static TASK_TYPE_BASH = 'eide.bash';
+
+    provideTasks(token: vscode.CancellationToken): vscode.ProviderResult<vscode.Task[]> {
+        return undefined;
+    }
+
+    resolveTask(task_: vscode.Task, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Task> {
+
+        const workspaceManager = WorkspaceManager.getInstance();
+
+        if (task_.definition.type == EideTaskProvider.TASK_TYPE_BASH) {
+
+            let bash_executable = '/bin/bash';
+
+            if (platform.osType() == 'win32') {
+                if (SettingManager.GetInstance().isEnableMsys()) {
+                    bash_executable = ResManager.instance().getUnixBash();
+                } else {
+                    bash_executable = `bash.exe`;
+                }
+            }
+
+            const definition: EideShellTaskDef = <any>task_.definition;
+
+            const task = new vscode.Task(definition, vscode.TaskScope.Workspace,
+                definition.name || definition.label, EideTaskProvider.TASK_TYPE_BASH, definition.problemMatchers);
+
+            let envs = definition.env;
+            const prj = projectExplorer.getActiveProject();
+            if (prj) {
+                envs = utility.mergeEnv(prj.getProjectVariables(), envs || {});
+            }
+
+            task.execution = new vscode.ShellExecution(definition.command, {
+                executable: bash_executable,
+                shellArgs: ['-c'],
+                cwd: definition?.options?.cwd || workspaceManager.getCurrentFolder()?.path,
+                env: utility.mergeEnv(process.env, envs || {})
+            });
+
+            task.group = definition.group;
+
+            return task;
+        }
+
+        return undefined;
+    }
+}
+
+////////////////////////////////////////////
+// --- terminal link provider
+////////////////////////////////////////////
+
+class EideTerminalLink extends vscode.TerminalLink {
+    file?: string;
+    line?: number;
+}
+
+interface TerminalLinkPattern {
+    regexp: RegExp;
+    file: number;
+    line: number;
+    col?: number;
+}
+
+class EideTerminalLinkProvider implements vscode.TerminalLinkProvider<EideTerminalLink> {
+
+    private workspace: File | undefined;
+
+    private patterns: TerminalLinkPattern[] = [
+
+        // keil c51
+        {
+            regexp: new RegExp("IN LINE (\\d+) OF ([^:]+):", 'i'),
+            line: 1,
+            file: 2
+        },
+
+        // armcc
+        {
+            regexp: new RegExp("^\"([^\"]+)\", line (\\d+):", 'i'),
+            file: 1,
+            line: 2
+        },
+
+        // gcc
+        {
+            regexp: new RegExp("^(.+):(\\d+):(\\d+):", 'i'),
+            file: 1,
+            line: 2,
+            col: 3
+        },
+
+        // iar
+        {
+            regexp: new RegExp("^\\s*\"([^\"]+)\",(\\d+)\\s+", 'i'),
+            file: 1,
+            line: 2
+        },
+
+        // cosmic stm8
+        {
+            regexp: new RegExp(String.raw`^#\w+ \w+stm8 (.+?):(\d+)`),
+            file: 1,
+            line: 2
+        },
+    ];
+
+    constructor() {
+        this.workspace = WorkspaceManager.getInstance().getWorkspaceRoot();
+    }
+
+    private toAbsPath(path: string): string {
+
+        if (this.workspace == undefined || NodePath.isAbsolute(path)) {
+            return path;
+        }
+
+        return File.normalize(`${this.workspace.path}/${path}`);
+    }
+
+    async provideTerminalLinks(context: vscode.TerminalLinkContext, token: vscode.CancellationToken): Promise<EideTerminalLink[]> {
+
+        // only for eide builder task
+        if (!context.terminal.name.trim().includes('build')) {
+            return [];
+        }
+
+        for (const pattern of this.patterns) {
+            const m = pattern.regexp.exec(context.line);
+            if (m && m.length > 1) {
+                const link = new EideTerminalLink(m.index, m[0].length);
+                link.file = this.toAbsPath(m[pattern.file]);
+                link.line = parseInt(m[pattern.line]) - 1;
+                return [link];
+            }
+        }
+
+        return [];
+    }
+
+    async handleTerminalLink(link: EideTerminalLink): Promise<void> {
+
+        if (!link.file || !link.line || link.line == -1)
+            return;
+
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(link.file));
+
+        vscode.window.showTextDocument(doc, {
+            preview: true,
+            selection: doc.lineAt(link.line).range
+        });
+    }
+}
+
+///////////////////////////////////////////////
+// --- terminal provider
+///////////////////////////////////////////////
+
+class EideTerminalProvider implements vscode.TerminalProfileProvider {
+
+    public static readonly UNIX_BASH_ID = 'eide.unix.bash';
+    public static readonly SYSTEM_SHELL_ID = 'eide.system.shell';
+
+    private type: string;
+
+    constructor(id: string) {
+        this.type = id;
+    }
+
+    provideTerminalProfile(token: vscode.CancellationToken): vscode.ProviderResult<vscode.TerminalProfile> {
+
+        switch (this.type) {
+            case EideTerminalProvider.UNIX_BASH_ID:
+                return this.provideBashTerminal();
+            case EideTerminalProvider.SYSTEM_SHELL_ID:
+                return this.provideSystemTerminal();
+            default:
+                return undefined;
+        }
+    }
+
+    private cwd(allowUseLocActiveFolder?: boolean): string {
+
+        let cwd = platform.userhome();
+
+        const workspace = WorkspaceManager.getInstance().getWorkspaceRoot();
+        if (workspace && workspace.IsDir()) {
+            cwd = workspace.path;
+        } else if (allowUseLocActiveFolder) {
+            const wsLi = WorkspaceManager.getInstance().getWorkspaceList();
+            if (wsLi.length > 0) cwd = wsLi[0].path;
+        }
+
+        return cwd;
+    }
+
+    private provideSystemTerminal(): vscode.ProviderResult<vscode.TerminalProfile> {
+
+        let shellName: string;
+        let shellPath: string;
+
+        if (platform.osType() == 'win32') {
+            let f = ResManager.GetInstance().getPowerShell();
+            if (f) {
+                shellName = 'powershell';
+                shellPath = f.path;
+            } else {
+                let cmd = ResManager.GetInstance().getCMDPath();
+                if (cmd) {
+                    shellName = 'cmd';
+                    shellPath = cmd;
+                } else {
+                    GlobalEvent.emit('msg', newMessage('Error', `Not found 'cmd.exe' on your pc !`));
+                    return undefined;
+                }
+            }
+        } else {
+            shellName = 'shell';
+            shellPath = '/bin/bash';
+        }
+
+        const welcome = [
+            `--------------------------------------------`,
+            `          \x1b[32;22m ${shellName} (eide env) \x1b[0m`,
+            `--------------------------------------------`,
+            ``
+        ];
+
+        return new vscode.TerminalProfile({
+            name: shellName,
+            shellPath: shellPath,
+            cwd: this.cwd(true),
+            env: process.env,
+            strictEnv: true,
+            message: welcome.join('\r\n')
+        });
+    }
+
+    private provideBashTerminal(): vscode.ProviderResult<vscode.TerminalProfile> {
+
+        // welcome msg
+        const welcome = [
+            `--------------------------------------------`,
+            `          \x1b[32;22m welcome to bash \x1b[0m`,
+            `--------------------------------------------`,
+            ``
+        ];
+
+        return new vscode.TerminalProfile({
+            name: 'msys bash',
+            shellPath: ResManager.instance().getUnixBash(),
+            cwd: this.cwd(true),
+            env: process.env,
+            strictEnv: true,
+            message: welcome.join('\r\n')
+        });
+    }
+}
+
+//-------------------------------------------------
+//- .mapView viewer
+//-------------------------------------------------
+
+import { FileWatcher } from '../lib/node-utility/FileWatcher';
+import { ToolchainManager, ToolchainName } from './ToolchainManager';
+import {
+    JLinkOptions, JLinkProtocolType, OpenOCDFlashOptions, 
+    PyOCDFlashOptions, STLinkOptions, ProbeRSFlashOptions, STVPFlasherOptions
+} from './HexUploader';
+import { AbstractProject } from './EIDEProject';
+import { EideDiagnosticCode } from './ProblemMatcher';
+
+type MapViewParserType = 'memap' | 'builtin';
+
+interface MapViewRef {
+
+    uid: string;
+
+    vscWebview?: vscode.Webview;
+
+    title: string;
+
+    parser: MapViewParserType;
+
+    toolchainId: string;
+
+    treeDepth: number;
+
+    mapPath: string;
+};
+
+interface MapViewInfo {
+
+    watcher: FileWatcher;
+
+    refList: MapViewRef[];
+};
+
+class MapViewEditorProvider implements vscode.CustomTextEditorProvider {
+
+    private mapViews: Map<string, MapViewInfo> = new Map();
+
+    resolveCustomTextEditor(document: vscode.TextDocument, webviewPanel: vscode.WebviewPanel, token: vscode.CancellationToken): void | Thenable<void> {
+
+        const viewFile = new File(document.fileName);
+        const title = viewFile.noSuffixName;
+
+        // view uid
+        const uid = `${viewFile.path}-${Date.now().toString()}`;
+
+        // init
+        webviewPanel.title = title;
+        webviewPanel.iconPath = vscode.Uri.file(ResManager.GetInstance().GetIconByName('Report_16x.svg').path);
+        webviewPanel.webview.html = this.genErrorHtml(title, 'No Content');
+        webviewPanel.onDidDispose(() => this.deleteRef(viewFile.path, uid));
+
+        if (!viewFile.IsFile()) {
+            webviewPanel.webview.html = this.genErrorHtml(title, `<span class="error">Error</span>: Not found file '${viewFile.path}' !`);
+            return;
+        }
+
+        // check tool type
+        const conf: {
+            tool?: string, 
+            fileName?: string, 
+            compilerName?: string,
+            compilerFullName?: string
+        } = yaml.parse(viewFile.Read());
+        if (!conf.tool) {
+            webviewPanel.webview.html = this.genErrorHtml(title, `<span class="error">Error</span>: Invalid toolchain type !`);
+            return;
+        }
+
+        let toolchainId = conf.tool;
+
+        // 由于 LLVM model 的 toolId 使用的是 GCC（因为clang兼容GCC的参数）
+        // 因此对于 LLVM 我们要单独判断
+        if (conf.compilerName && conf.compilerName.includes('LLVM'))
+            if (/\bArm\b/i.test(conf.compilerName))
+                toolchainId = 'LLVM_ARM';
+
+        let fileDepth = SettingManager.GetInstance().getMapViewParserDepth();
+        if (fileDepth <= 0)
+            fileDepth = 100;
+
+        let parser: MapViewParserType = 'memap';
+
+        switch (toolchainId) {
+            case 'AC5':
+            case 'AC6':
+            case 'GCC':
+            case 'GNU_SDCC_MCS51':
+            case 'IAR_ARM':
+                parser = 'memap';
+                break;
+            default:
+                parser = 'builtin';
+                break;
+        }
+
+        // check: do we have support a builtin parser ?
+        if (parser == 'builtin') {
+
+            let isSupported = false;
+
+            const toolchain = ToolchainManager.getInstance().getToolchainByName(<ToolchainName>toolchainId);
+            if (toolchain) {
+                isSupported = toolchain.parseMapFile != undefined;
+            }
+
+            if (!isSupported) {
+                webviewPanel.webview.html = this.genErrorHtml(title,
+                    `<span class="error">Error</span>: We don't support this toolchain type: '${conf.tool}' yet !`);
+                return;
+            }
+        }
+
+        // get map file
+        const defName = viewFile.noSuffixName + '.map';
+        const mapFile = File.fromArray([viewFile.dir, conf.fileName || defName]);
+
+        if (!mapFile.IsFile()) {
+            webviewPanel.webview.html = this.genErrorHtml(title, `<span class="error">Error</span>: Not found file '${mapFile.path}' !`);
+            return;
+        }
+
+        // auto update when file changed 
+        try {
+
+            let mInfo = this.mapViews.get(viewFile.path);
+            if (mInfo == undefined) {
+                mInfo = { watcher: new FileWatcher(mapFile, false), refList: [] };
+                mInfo.watcher.OnChanged = () => this.showMapView();
+                mInfo.watcher.Watch();
+                this.mapViews.set(viewFile.path, mInfo);
+            }
+
+            this.pushRef(viewFile.path, {
+                uid: uid,
+                vscWebview: webviewPanel.webview,
+                title: title,
+                parser: parser,
+                toolchainId: toolchainId,
+                treeDepth: fileDepth,
+                mapPath: mapFile.path
+            });
+
+        } catch (error) {
+            // do nothing
+        }
+
+        this.showMapView();
+    }
+
+    private pushRef(viewFilePath: string, item: MapViewRef) {
+
+        const mInfo = this.mapViews.get(viewFilePath);
+        if (mInfo) {
+            const idx = mInfo.refList.findIndex((inf) => inf.uid == item.uid);
+            if (idx == -1) {
+                mInfo.refList.push(item);
+            }
+        }
+    }
+
+    private deleteRef(viewFilePath: string, uid: string) {
+
+        const mInfo = this.mapViews.get(viewFilePath);
+        if (mInfo) {
+
+            const idx = mInfo.refList.findIndex((inf) => inf.uid == uid);
+            if (idx != -1) {
+                delete mInfo.refList[idx].vscWebview;
+                mInfo.refList.splice(idx, 1);
+            }
+
+            if (mInfo.refList.length == 0) {
+                try { mInfo.watcher.Close(); } catch (error) { }
+                this.mapViews.delete(viewFilePath);
+            }
+        }
+    }
+
+    private showMapView() {
+
+        this.mapViews.forEach((mInfo) => {
+
+            for (const vInfo of mInfo.refList) {
+                try {
+
+                    let lines: string[] = [];
+
+                    // use memap tools
+                    if (vInfo.parser == 'memap') {
+
+                        let memapTyp = 'ARM_MICRO';
+
+                        switch (vInfo.toolchainId) {
+                            case 'AC5':
+                            case 'AC6':
+                                memapTyp = 'ARM_MICRO';
+                                break;
+                            case 'GCC':
+                            case 'GNU_SDCC_MCS51':
+                                memapTyp = 'GCC_ARM';
+                                break;
+                            case 'IAR_ARM':
+                                memapTyp = 'IAR';
+                                break;
+                            default:
+                                throw new Error(`We don't support this toolchain type: '${vInfo.toolchainId}' yet !`);
+                        }
+
+                        if (os.platform() == 'win32') {
+                            // "%USERPROFILE%\.eide\bin\python36\python3" -m memap %*
+                            const py3 = ResManager.instance().getPython3();
+                            lines = ChildProcess
+                                .execFileSync(py3, ['-m', 'memap', '-t', memapTyp, '-d', vInfo.treeDepth.toString(), vInfo.mapPath])
+                                .toString().split(/\r\n|\n/);
+                        } else {
+                            // PYTHONPATH="/home/xxx/.eide/bin/builder/utils/memap" python -m memap -t GCC_ARM -d 100 "/home/xxx/build/Debug/stm32f1xx_gcc.map"
+                            const memapPkgDir = File.from(ResManager.GetInstance().getLegacyBuilderDir().path, 'utils', 'memap');
+                            const command = `PYTHONPATH="${memapPkgDir.path}" python -m memap -t ${memapTyp} -d ${vInfo.treeDepth} "${vInfo.mapPath}"`;
+                            lines = ChildProcess
+                                .execSync(command, { cwd: memapPkgDir.dir })
+                                .toString().split(/\r\n|\n/);
+                        }
+                    }
+                    // use built-in tools
+                    else {
+
+                        const toolchain = ToolchainManager.getInstance().getToolchainByName(<ToolchainName>vInfo.toolchainId);
+                        if (!toolchain) {
+                            throw new Error(`not have this toolchain: '${vInfo.toolchainId}'`);
+                        }
+
+                        if (toolchain.parseMapFile) {
+                            let ret = toolchain.parseMapFile(vInfo.mapPath);
+                            if (ret instanceof Error)
+                                throw ret;
+                            else
+                                lines = ret;
+                        }
+                    }
+
+                    if (vInfo.vscWebview) {
+                        vInfo.vscWebview.options = {
+                            enableScripts: true
+                        };
+                        vInfo.vscWebview.html = this.genMapViewHtml(vInfo.vscWebview, vInfo.title, lines.join('\n'));
+                    }
+
+                } catch (error) {
+                    if (vInfo.vscWebview)
+                        vInfo.vscWebview.html = this.genErrorHtml(
+                            vInfo.title, `<span class="error">Parse error</span>: \r\n${error.message}`);
+                }
+            }
+        });
+    }
+
+    private genMapViewHtml(webview: vscode.Webview, title: string, cont: string): string {
+        const resManager = ResManager.instance();
+        const htmlFolder = File.fromArray([resManager.GetHTMLDir().path, 'map_report']);
+        const htmlFile = File.fromArray([htmlFolder.path, 'index.html']);
+        // https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/String/replace
+        // str.replace 美元符号 $ 是特殊字符，因此需要使用 function 代替，否则会导致替换结果错误
+        //  - str.replace('abc', () => 'ab$c')
+        const html = htmlFile.Read()
+            .replace(/"[\w\-\.\/]+?\.(?:css|js)"/ig, (str) => {
+                const fileName = str.substr(1, str.length - 2); // remove '"'
+                const absPath = File.normalize(htmlFolder.path + File.sep + fileName);
+                return `"${webview.asWebviewUri(vscode.Uri.file(absPath)).toString()}"`;
+            })
+            .replace('$EIDE_MAPVIEW_TITLE', title)
+            .replace('$EIDE_MAPVIEW_TEXT_CONTENT', () => JSON.stringify(cont));
+        return html;
+    }
+
+    private genErrorHtml(title: string, cont: string): string {
+        return `
+        <!DOCTYPE html>
+			<html lang="en">
+			<head>
+				<meta charset="UTF-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>${title}</title>
+                <style type="text/css">
+                    body {
+                        font-family: var(--vscode-editor-font-family);
+                        font-size: var(--vscode-editor-font-size);
+                    }
+                    pre {
+                        font-family: var(--vscode-editor-font-family);
+                        font-size: var(--vscode-editor-font-size);
+                    }
+                    .success {
+                        color: var(--vscode-terminal-ansiGreen);
+                    }
+                    .error {
+                        color: var(--vscode-errorForeground);
+                    }
+                    .info {
+                        color: var(--vscode-editorInfo-foreground);
+                    }
+                </style>
+			</head>
+			<body>
+                <section>
+				    <pre>${cont}</pre>
+                </section>
+			</body>
+			</html>
+        `;
+    }
+}
+
+//------------------------------------------------------------
+//- Debug Config Provider
+//------------------------------------------------------------
+
+class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
+
+    private debuggerType: string | undefined;
+    private project: AbstractProject | undefined;
+
+    constructor(debugType?: string, project?: AbstractProject) {
+        this.debuggerType = debugType;
+        this.project = project;
+    }
+
+    provideDebugConfigurations(folder: vscode.WorkspaceFolder | undefined,
+        token?: vscode.CancellationToken): vscode.ProviderResult<vscode.DebugConfiguration[]> {
+
+        let result: vscode.DebugConfiguration[] = [];
+
+        if (!folder)
+            return result;
+
+        const prj = this.project || projectExplorer.getActiveProject();
+        if (!prj)
+            return result;
+
+        let wsDir = folder.uri.fsPath;
+        let prjDir = prj.getRootDir().path;
+        if (platform.osType() == 'win32') {
+            wsDir = wsDir.toLowerCase();
+            prjDir = prjDir.toLowerCase();
+        }
+        if (wsDir != prjDir)
+            return result;
+
+        const toolchain = prj.getToolchain();
+        const toolchainManager = ToolchainManager.getInstance();
+        const settingManager = SettingManager.instance();
+        const outFullName = prj.toRelativePath(prj.getExecutablePathWithoutSuffix());
+
+        let gdbPath = 'arm-none-eabi-gdb';
+
+        switch (toolchain.name) {
+            case 'AC5':
+            case 'AC6':
+            case 'GCC':
+                if (!toolchainManager.isToolchainPathReady('GCC')) {
+                    const msg = view_str$prompt$not_found_compiler.replace('{}', 'arm-none-eabi-gcc');
+                    ResInstaller.instance().setOrInstallTools('GCC', msg, 'EIDE.ARM.GCC.InstallDirectory');
+                    return result;
+                }
+                gdbPath = NodePath.join(
+                    settingManager.getGCCDir().path, 'bin', 
+                    settingManager.getGCCPrefix() + `gdb${platform.exeSuffix()}`);
+                break;
+            case 'RISCV_GCC':
+                if (!toolchainManager.isToolchainPathReady(toolchain.name)) {
+                    const msg = view_str$prompt$not_found_compiler.replace('{}', 'EIDE.RISCV.InstallDirectory');
+                    GlobalEvent.emit('msg', newMessage('Warning', msg));
+                    return result;
+                }
+                gdbPath = NodePath.join(
+                    settingManager.getRiscvToolFolder().path, 'bin', 
+                    settingManager.getRiscvToolPrefix() + `gdb${platform.exeSuffix()}`);
+                break;
+            case 'ANY_GCC':
+                if (!toolchainManager.isToolchainPathReady(toolchain.name)) {
+                    const msg = view_str$prompt$not_found_compiler.replace('{}', 'EIDE.Toolchain.AnyGcc.InstallDirectory');
+                    GlobalEvent.emit('msg', newMessage('Warning', msg));
+                    return result;
+                }
+                gdbPath = NodePath.join(
+                    settingManager.getAnyGccToolFolder().path, 'bin', 
+                    settingManager.getAnyGccToolPrefix() + `gdb${platform.exeSuffix()}`);
+                break;
+            // case 'IAR_STM8':
+            // case 'COSMIC_STM8':
+            // case 'SDCC':
+            //     break;
+            default:
+                return result;
+        }
+
+        const toFmtRelativePath = (abspath: string) => {
+            let path = prj.ToRelativePath(abspath);
+            if (path) {
+                path = File.ToLocalPath(path);
+                return path.startsWith('.') ? path : `.${File.sep}${path}`;
+            }
+            return File.ToLocalPath(abspath);
+        };
+
+        const getSvdFile = (prj: AbstractProject) => {
+            const device = prj.GetPackManager().getCurrentDevInfo();
+            if (device && device.svdPath) {
+                const svdpath = toFmtRelativePath(device.svdPath);
+                GlobalEvent.log_info(`[debug config] Use svd file: ${svdpath}`);
+                return svdpath;
+            } else {
+                const searchDirs = [
+                    prj.getRootDir(),
+                    prj.getEideDir(),
+                    File.from(prj.getRootDir().path, 'tools')
+                ];
+                for (const d of searchDirs) {
+                    const r = d.GetList([/\.svd$/i], File.EXCLUDE_ALL_FILTER);
+                    if (r.length) {
+                        const svdpath = toFmtRelativePath(r[0].path);
+                        GlobalEvent.log_info(`[debug config] Use svd file: ${svdpath}`);
+                        return svdpath;
+                    }
+                }
+            }
+        };
+
+        const newCortexDebugCfg = (prj: AbstractProject) => {
+
+            const dbgCfg: vscode.DebugConfiguration = {
+                type: 'cortex-debug',
+                name: 'Debug',
+                request: 'launch'
+            };
+
+            const toolchain = prj.getToolchain();
+            const settingManager = SettingManager.instance();
+            switch (toolchain.name) {
+                case 'AC5':
+                case 'AC6':
+                case 'GCC':
+                    dbgCfg['toolchainPrefix'] = settingManager.getGCCPrefix().replace(/-$/, '');
+                    dbgCfg['armToolchainPath'] = NodePath.join(settingManager.getGCCDir().path, 'bin');
+                    break;
+                default:
+                    if (toolchain.getToolchainPrefix)
+                        dbgCfg['toolchainPrefix'] = toolchain.getToolchainPrefix().replace(/-$/, '');
+                    dbgCfg['armToolchainPath'] = NodePath.join(toolchain.getToolchainDir().path, 'bin');
+                    break;
+            }
+
+            dbgCfg['cwd'] = prj.getRootDir().path;
+            if (toolchain.name == 'AC5' || toolchain.name == 'AC6') {
+                //"loadFiles": [ ".\\build\\xxxx.hex" ],
+                //"symbolFiles": [ ".\\build\\xxx.elf" ],
+                dbgCfg['loadFiles'] = [
+                    toFmtRelativePath(prj.getExecutablePathWithoutSuffix() + '.hex')];
+                dbgCfg['symbolFiles'] = [
+                    toFmtRelativePath(prj.getExecutablePathWithoutSuffix() + '.axf')];
+            } else {
+                dbgCfg['executable'] = toFmtRelativePath(prj.getExecutablePathWithoutSuffix() + '.elf');
+            }
+            dbgCfg['runToEntryPoint'] = 'main';
+            dbgCfg['liveWatch'] = {
+                'enabled': true,
+                'samplesPerSecond': 4
+            };
+
+            dbgCfg['svdFile'] = getSvdFile(prj);
+
+            return dbgCfg;
+        };
+
+        const newCdtDebugCfg = (prj: AbstractProject) => {
+            return <vscode.DebugConfiguration>{
+                "type": "gdbtarget",
+                "request": "launch",
+                "name": "CDT GDB Debug: xxx",
+                "cwd": prj.getRootDir().path,
+                "program": outFullName + toolchain.elfSuffix,
+                "gdb": gdbPath,
+                "definitionPath": getSvdFile(prj),
+                "auxiliaryGdb": true,
+                "initCommands": [
+                    "monitor halt",
+                    "monitor reset",
+                    `load "${outFullName}.hex"`,
+                    "monitor reset",
+                    "tbreak main"
+                ]
+            };
+        };
+
+        const newAttachDebugCfg = (cfgtocopy: any) => {
+            const nCfg = JSON.parse(JSON.stringify(cfgtocopy));
+            nCfg['name'] += '(attach)';
+            nCfg['request'] = 'attach';
+            if (nCfg['type'] === 'cortex-debug') {
+                nCfg['runToEntryPoint'] = undefined;
+            } else if (nCfg['type'] === 'gdbtarget') {
+                nCfg['initCommands'] = undefined;
+            }
+            return nCfg;
+        };
+
+        const fmtOpenocdCfgPath = (type: 'interface' | 'target', path: string) => {
+            let cfgpath = path.startsWith('${workspaceFolder}/') 
+                ? path.replace('${workspaceFolder}/', '')
+                : `${type}/${path}`;
+            if (cfgpath && !cfgpath.endsWith('.cfg'))
+                cfgpath += '.cfg';
+            return cfgpath;
+        };
+
+        const flasherOpts = prj.GetConfiguration().uploadConfigModel.data;
+        const flashertype = prj.getUploaderType();
+        const projectCwd = prj.getRootDir().path;
+
+        if (flashertype == 'JLink') {
+            const jlinkGdbServerPath = NodePath.join(settingManager.getJlinkDir(),
+                platform.osType() == 'win32' ? 'JLinkGDBServerCL.exe' : 'JLinkGDBServerCLExe');
+            // For cortex-debug
+            const dbgCfg = newCortexDebugCfg(prj);
+            const flasherCfg = (<JLinkOptions>flasherOpts);
+            dbgCfg['name'] = 'Cortex-Debug: JLINK';
+            dbgCfg['servertype'] = 'jlink';
+            dbgCfg['interface'] = flasherCfg.proType == JLinkProtocolType.JTAG ? 'jtag' : 'swd';
+            dbgCfg['device'] = flasherCfg.cpuInfo.cpuName;
+            dbgCfg['serverpath'] = jlinkGdbServerPath;
+            if (flasherCfg.otherCmds) {
+                // -IP <IP/Tunnel/SerialNo/Nickname> Selects a specific J-Link
+                let m = /-IP ([^\s]+)/.exec(flasherCfg.otherCmds);
+                if (m && m.length > 1)
+                    dbgCfg['ipAddress'] = m[1];
+                // -USB <SerialNo/Nickname> Selects a specific J-Link
+                m = /(?:-USB|-SelectEmuBySN) ([^\s]+)/.exec(flasherCfg.otherCmds);
+                if (m && m.length > 1)
+                    dbgCfg['serialNumber'] = m[1];
+                // -JLinkScriptFile <ScriptFilePath>
+                m = /-JLinkScriptFile ([^\s"]+|"[^"]+")/.exec(flasherCfg.otherCmds);
+                if (m && m.length > 1)
+                    dbgCfg['jlinkscript'] = m[1].startsWith('"')
+                        ? m[1].substring(1, m[1].length - 1)
+                        : m[1];
+            }
+            result.push(dbgCfg);
+            result.push(newAttachDebugCfg(dbgCfg));
+            // For CDT GDB Debug Adapter
+            const cdtDbgCfg = newCdtDebugCfg(prj);
+            cdtDbgCfg["name"] = "CDT GDB Debug: JLINK";
+            cdtDbgCfg["customResetCommands"] = [
+                "maintenance flush register-cache",
+                "maintenance flush dcache",
+                "monitor halt",
+                "monitor reset",
+                "tbreak main",
+                "continue"
+            ];
+            cdtDbgCfg["target"] = {
+                "server": jlinkGdbServerPath,
+                "port": "50100",
+                "automaticallyKillServer": true,
+                "cwd": projectCwd,
+                "serverParameters": [
+                    "-singlerun", "-nogui",
+                    "-if", flasherCfg.proType == JLinkProtocolType.JTAG ? 'jtag' : 'swd',
+                    "-port", "50100",
+                    // "-swoport", "50101",
+                    // "-telnetport", "50102",
+                    "-device", flasherCfg.cpuInfo.cpuName
+                ].concat(utility.parseCliArgs(flasherCfg.otherCmds))
+            };
+            result.push(cdtDbgCfg);
+        }
+
+        else if (flashertype == 'OpenOCD') {
+            const dbgCfg = newCortexDebugCfg(prj);
+            const flasherCfg = (<OpenOCDFlashOptions>flasherOpts);
+            dbgCfg['name'] = 'Cortex-Debug: OpenOCD';
+            dbgCfg['servertype'] = 'openocd';
+            const ocdCfgs: string[] = [];
+            if (flasherCfg.interface.trim())
+                ocdCfgs.push(fmtOpenocdCfgPath('interface', flasherCfg.interface));
+            if (flasherCfg.target.trim())
+                ocdCfgs.push(fmtOpenocdCfgPath('target', flasherCfg.target));
+            dbgCfg['configFiles'] = ocdCfgs;
+            dbgCfg['serverpath'] = settingManager.getOpenOCDExePath();
+            result.push(dbgCfg);
+            result.push(newAttachDebugCfg(dbgCfg));
+            // For CDT GDB Debug Adapter
+            const cdtDbgCfg = newCdtDebugCfg(prj);
+            cdtDbgCfg["name"] = "CDT GDB Debug: OpenOCD";
+            const fArgs: string[] = [];
+            ocdCfgs.forEach(p => fArgs.push('-f', p));
+            cdtDbgCfg["initCommands"] = [
+                "monitor reset halt",
+                `load "${outFullName}.hex"`,
+                "monitor reset halt",
+                "tbreak main"
+            ];
+            cdtDbgCfg["customResetCommands"] = [
+                "maintenance flush register-cache",
+                "maintenance flush dcache",
+                "monitor reset halt",
+                "tbreak main",
+                "continue"
+            ];
+            cdtDbgCfg["target"] = {
+                "server": settingManager.getOpenOCDExePath(),
+                "port": "50100",
+                "automaticallyKillServer": true,
+                "cwd": projectCwd,
+                "serverParameters": [
+                    "-c", "gdb_port 50100",
+                    "-c", "tcl_port 50101",
+                    // "-c", "\"telnet_port 50102\"",
+                    "-s", projectCwd,
+                    "-f", NodePath.join(ResManager.instance().getAppDataDir().path, 'openocd-helpers.tcl')
+                ].concat(fArgs).concat([
+                    "-c", "CDLiveWatchSetup"
+                ])
+            };
+            result.push(cdtDbgCfg);
+        }
+
+        else if (flashertype == 'pyOCD') {
+            const dbgCfg = newCortexDebugCfg(prj);
+            const flasherCfg = (<PyOCDFlashOptions>flasherOpts);
+            dbgCfg['name'] = 'Cortex-Debug: pyOCD';
+            dbgCfg['servertype'] = 'pyocd';
+            dbgCfg['targetId'] = flasherCfg.targetName;
+            const cliArgs: string[] = [];
+            if (flasherCfg.config) {
+                const confFile = new File(prj.ToAbsolutePath(flasherCfg.config));
+                if (confFile.IsFile()) {
+                    cliArgs.push('--config');
+                    cliArgs.push(confFile.path);
+                }
+            }
+            if (flasherCfg.otherCmds)
+                utility.parseCliArgs(flasherCfg.otherCmds)
+                    .forEach(s => cliArgs.push(s))
+            if (flasherCfg.speed) {
+                cliArgs.push('-f');
+                cliArgs.push(flasherCfg.speed);
+            }
+            dbgCfg['serverArgs'] = cliArgs;
+            // pyocd not support livewatch
+            dbgCfg['liveWatch']['enabled'] = false;
+            result.push(dbgCfg);
+            result.push(newAttachDebugCfg(dbgCfg));
+            // For CDT GDB Debug Adapter
+            const cdtDbgCfg = newCdtDebugCfg(prj);
+            cdtDbgCfg["name"] = "CDT GDB Debug: pyOCD";
+            cdtDbgCfg["initCommands"] = [
+                "monitor reset halt",
+                `load "${outFullName}.hex"`,
+                "monitor reset halt",
+                "tbreak main"
+            ];
+            cdtDbgCfg["customResetCommands"] = [
+                "maintenance flush register-cache",
+                "maintenance flush dcache",
+                "monitor reset halt",
+                "tbreak main",
+                "continue"
+            ];
+            cdtDbgCfg["target"] = {
+                "server": "pyocd",
+                "port": "50100",
+                "automaticallyKillServer": true,
+                "cwd": projectCwd,
+                "environment": {
+                    "PYTHONUTF8": "1",
+                    "PYTHONIOENCODING": "utf-8"
+                },
+                "serverParameters": [
+                    "gdbserver",
+                    "--port", "50100",
+                    // "--telnet-port", "50102",
+                    "--target", flasherCfg.targetName
+                ].concat(cliArgs)
+            };
+            result.push(cdtDbgCfg);
+        }
+
+        else if (flashertype == 'STLink') {
+            const resManager = ResManager.instance();
+            const flasherCfg = (<STLinkOptions>flasherOpts);
+            // find ST-LINK_gdbserver
+            let gdbserverPath: string | undefined;
+            if (platform.osType() == 'win32') {
+                const gdbserver = File.from(resManager.getEideToolsInstallDir(), 
+                    'stlink_gdb_server', 'bin', 'ST-LINK_gdbserver.exe');
+                if (!gdbserver.IsFile()) {
+                    ResInstaller.instance().setOrInstallTools('stlink_gdb_server', 'Not found ST-LINK_gdbserver.exe');
+                    return [];
+                }
+                gdbserverPath = gdbserver.path;
+            } else {
+                gdbserverPath = platform.find('ST-LINK_gdbserver');
+            }
+            // find STM32_Programmer_CLI
+            let cubeProgramerPath: string | undefined;
+            if (platform.osType() == 'win32') {
+                const cubeProgramerExe = File.from(resManager.getEideToolsInstallDir(), 
+                    'st_cube_programer', 'bin', 'STM32_Programmer_CLI.exe');
+                if (!cubeProgramerExe.IsFile()) {
+                    ResInstaller.instance().setOrInstallTools('STLink', 'Not found STM32_Programmer_CLI.exe');
+                    return [];
+                }
+                cubeProgramerPath = cubeProgramerExe.dir;
+            } else {
+                const p = platform.find('STM32_Programmer_CLI');
+                if (p)
+                    cubeProgramerPath = NodePath.dirname(p);
+            }
+            const dbgCfg = newCortexDebugCfg(prj);
+            dbgCfg['name'] = 'Cortex-Debug: STLink';
+            dbgCfg['servertype'] = 'stlink';
+            dbgCfg['interface'] = flasherCfg.proType == 'SWD' ? 'swd' : 'jtag';
+            dbgCfg['stlinkPath'] = gdbserverPath;
+            dbgCfg['stm32cubeprogrammer'] = cubeProgramerPath;
+            result.push(dbgCfg);
+            result.push(newAttachDebugCfg(dbgCfg));
+            // For CDT GDB Debug Adapter
+            const cdtDbgCfg = newCdtDebugCfg(prj);
+            cdtDbgCfg["name"] = "CDT GDB Debug: STLink";
+            cdtDbgCfg["target"] = {
+                "server": gdbserverPath,
+                "port": "50100",
+                "automaticallyKillServer": true,
+                "cwd": projectCwd,
+                "serverParameters": [
+                    "-p", "50100",
+                    "-cp", cubeProgramerPath,
+                    `--${flasherCfg.proType == 'SWD' ? 'swd' : 'jtag'}`,
+                    "--halt"
+                ]
+            };
+            result.push(cdtDbgCfg);
+        }
+
+        else if (flashertype == 'probe-rs') {
+            const flasherCfg = (<ProbeRSFlashOptions>flasherOpts);
+            const dbgCfg: any = {
+                "type": "probe-rs-debug",
+                "request": "launch",
+                "name": "Debugger for probe-rs",
+                "cwd": projectCwd,
+                "connectUnderReset": false,
+                "chip": flasherCfg.target,
+                "wireProtocol": flasherCfg.protocol.toLowerCase() == 'swd' ? 'Swd' : 'Jtag',
+                "allowEraseAll": flasherCfg.allowEraseAll,
+                "flashingConfig": {
+                    "flashingEnabled": true,
+                    "haltAfterReset": true
+                },
+                "coreConfigs": [
+                    {
+                        "coreIndex": 0,
+                        "svdFile": getSvdFile(prj),
+                        "programBinary": toFmtRelativePath(
+                            prj.getExecutablePathWithoutSuffix() + '.elf')
+                    }
+                ]
+            };
+            if (flasherCfg.speed)
+                dbgCfg['speed'] = flasherCfg.speed;
+            // parse '--probe VID:PID' or '--probe VID:PID:Serial'
+            if (flasherCfg.otherOptions) {
+                let m = /--probe (\w+\:\w+(?:\:\w+)?)/.exec(flasherCfg.otherOptions);
+                if (m && m.length > 1) {
+                    dbgCfg['probe'] = m[1];
+                }
+                // parse '--chip-description-path <path>' (support quoted path)
+                // examples:
+                //   --chip-description-path /path/to/desc.yaml
+                //   --chip-description-path "/path/with spaces/desc.yaml"
+                m = /--chip-description-path\s+("[^"]+"|[^\s]+)/.exec(flasherCfg.otherOptions);
+                if (m && m.length > 1) {
+                    let p = m[1];
+                    // strip surrounding quotes if present
+                    if (p.startsWith('"') && p.endsWith('"'))
+                        p = p.substring(1, p.length - 1);
+                    dbgCfg['chipDescriptionPath'] = p;
+                }
+            }
+            result.push(dbgCfg);
+            result.push(newAttachDebugCfg(dbgCfg));
+        }
+
+        // else if (flashertype == 'STVP') {
+        //     const flasherCfg = (<STVPFlasherOptions>flasherOpts);
+        //     const dbgCfg: any = {
+        //         "type": "stm8-debug",
+        //         "request": "launch",
+        //         "name": "Debug: STM8",
+        //         "serverType": "st7",
+        //         "executable": toFmtRelativePath(prj.getExecutablePath()),
+        //         "cpu": flasherCfg.deviceName
+        //     };
+        //     const searchDirs = [
+        //         prj.getRootDir(),
+        //         prj.getEideDir(),
+        //         File.from(prj.getRootDir().path, 'tools')
+        //     ];
+        //     for (const d of searchDirs) {
+        //         const r = d.GetList([/\.svd\.json$/i], File.EXCLUDE_ALL_FILTER);
+        //         if (r.length) {
+        //             const svdpath = toFmtRelativePath(r[0].path);
+        //             GlobalEvent.log_info(`[debug config] Use svd file: ${svdpath}`);
+        //             dbgCfg['svdFile'] = svdpath;
+        //         }
+        //     }
+        // }
+
+        else {
+            const supported = ['jlink', 'stlink', 'openocd', 'pyocd', 'probe-rs'];
+            const msg = view_str$prompt$debugCfgNotSupported
+                .replace('{0}', supported.join(','))
+                .replace('{1}', flashertype);
+            GlobalEvent.show_msgbox('Warning', msg);
+        }
+
+        // filter by debugType
+        if (this.debuggerType)
+            result = result.filter(cfg => cfg.type == this.debuggerType);
+
+        return result;
+    }
+}
+
+async function startDebugging(viewItem?: ProjTreeItem, attach?: boolean) {
+
+    const prj = viewItem 
+        ? projectExplorer.getProjectByTreeItem(viewItem) 
+        : projectExplorer.getActiveProject();
+    if (!prj) {
+        GlobalEvent.show_msgbox('Warning', `No actived project to debug.`);
+        return;
+    }
+
+    const vscWorkspaceFolder: vscode.WorkspaceFolder = {
+        uri: vscode.Uri.file(prj.getRootDir().path),
+        name: prj.getRootDir().name,
+        index: 0
+    };
+
+    const provider = new ExternalDebugConfigProvider(undefined, prj);
+    let cfgs = await provider.provideDebugConfigurations(vscWorkspaceFolder);
+    if (!cfgs)
+        return;
+
+    if (attach)
+        cfgs = cfgs.filter(cfg => cfg.request === 'attach');
+    else
+        cfgs = cfgs.filter(cfg => cfg.request === 'launch');
+
+    const debuggerId = prj.getTargetInfo().settings.debugger || 'unknown';
+    cfgs = cfgs.filter(cfg => utility.DEBUGGER_MAPS[debuggerId].types.includes(cfg.type));
+
+    if (cfgs.length > 0) {
+        let cfg = cfgs[0];
+        if (cfgs.length > 1) {
+            const val = await vscode.window.showQuickPick(cfgs.map(e => e.name), {
+                placeHolder: 'Select a debug configuration'
+            });
+            if (val == undefined)
+                return; // user canceled
+            const idx = cfgs.findIndex(v => v.name === val);
+            cfg = cfgs[idx];
+        }
+        await vscode.debug.startDebugging(vscWorkspaceFolder, cfg);
+    }
+}
+
+class CompilerLogCodeActionProvider implements vscode.CodeActionProvider {
+
+    provideCodeActions(document: vscode.TextDocument, 
+        range: vscode.Range | vscode.Selection, 
+        context: vscode.CodeActionContext, token: vscode.CancellationToken): vscode.ProviderResult<(vscode.CodeAction | vscode.Command)[]> {
+        const results: (vscode.CodeAction | vscode.Command)[] = [];
+
+        let prjuid: string | undefined;
+        projectExplorer.foreachProjects(prj => {
+            const root = prj.getRootDir().path;
+            if (File.isSubPathOf(root, document.uri.fsPath)) {
+                prjuid = prj.getUid();
+                return true;
+            }
+        });
+
+        if (prjuid === undefined)
+            return results;
+
+        const stub_missed_diags: vscode.Diagnostic[] = [];
+
+        context.diagnostics.forEach((ele) => {
+            if (ele.source === 'eide') {
+                if (ele.code == EideDiagnosticCode.GCC_SYS_STUB_MISSED) {
+                    stub_missed_diags.push(ele);
+                }
+            }
+        });
+
+        if (stub_missed_diags.length > 0) {
+            const act = new vscode.CodeAction(view_str$add_missed_stubs, vscode.CodeActionKind.QuickFix);
+            act.diagnostics = stub_missed_diags;
+            act.command = {
+                title: view_str$add_missed_stubs,
+                command: 'eide.project.create_sys_stubs',
+                arguments: [prjuid]
+            };
+            results.push(act);
+        }
+
+        return results;
+    }
+}
+
+///////////////////////////////////////////////////
+// KEIL_C51 -> SDCC converter
+///////////////////////////////////////////////////
+
+const sfrMap: Map<string, string> = new Map();
+
+const insMap: any = {
+    //sfr P0   = 0x80; => __sfr __at (0x80) P0   ;
+    '__${1} __at(${3}) ${2};': /^\s*\b(sfr|sbit)\s+(\w+)\s*=\s*(0x[a-f0-9]+|\d+)\s*;/i
+};
+
+const keywordMap: any = {
+    '__at(${1})': /\b_at_\s+([0-9A-Fa-fXx]+)\b/,
+    '__using(${1})': /\busing\s+(\d+)\b/,
+    '__interrupt(${1})': /\binterrupt\s+(\d+)\b/
+};
+
+function c51ToSDCC() {
+
+    // file filter
+    const fileFilter = /\.(?:h|c)$/i;
+
+    if (vscode.window.activeTextEditor) {
+
+        if (!fileFilter.test(vscode.window.activeTextEditor.document.fileName)) {
+            GlobalEvent.emit('msg', newMessage('Warning', 'this file is not a .h/.c file !'));
+            return;
+        }
+
+        const file = new File(vscode.window.activeTextEditor.document.uri.fsPath);
+        if (file.IsFile()) {
+            try {
+                const res: string[] = [];
+                sfrMap.clear();
+                const lines = fs.readFileSync(file.path, 'utf8').split(/\n|\r\n/);
+                lines.forEach((_line, index) => {
+                    res.push(handleLine(_line, index + 1));
+                });
+                fs.writeFileSync(file.path, res.join(os.EOL));
+                GlobalEvent.emit('msg', newMessage('Info', 'Convertion finished !'));
+            } catch (error) {
+                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            }
+        }
+    }
+}
+
+function handleLine(_line: string, index: number): string {
+
+    let line = _line;
+
+    // handle keyword
+    for (const keyword in keywordMap) {
+        const matchs = keywordMap[keyword].exec(line);
+        if (matchs && matchs.length > 0) {
+            let replacer = keyword;
+
+            for (let i = 1; i < matchs.length; i++) {
+                replacer = replacer.replace('${' + i.toString() + '}', matchs[i]);
+            }
+
+            line = line.replace(matchs[0], replacer);
+        }
+    }
+
+    // handle registers
+    for (const key in insMap) {
+        const matchs = insMap[key].exec(line);
+
+        if (matchs && matchs.length > 1) {
+            let replacer = key;
+
+            for (let i = 1; i < matchs.length; i++) {
+                replacer = replacer.replace('${' + i.toString() + '}', matchs[i]);
+            }
+
+            line = line.replace(matchs[0], replacer);
+
+            if (sfrMap.has(matchs[2])) {
+                throw new Error('multiple sfr register \'' + matchs[2] + '\'' + ' at line: ' + index.toString());
+            }
+
+            sfrMap.set(matchs[2], matchs[3]);
+
+            return line;
+        }
+    }
+
+    //sbit  P00 = P0^0; => __sbit __at (0x80) P0_0 ;
+    let replacer = '__sbit __at(${value}) ${1};';
+    const reg = /^\s*\bsbit\s+(\w+)\s*=\s*(\w+)\s*\^\s*(\d+)\s*;/i;
+
+    const matchs = reg.exec(line);
+    if (matchs && matchs.length === 4) {
+        replacer = replacer.replace('${1}', matchs[1]);
+
+        if (!sfrMap.has(matchs[2])) {
+            throw new Error('not found sfr register \'' + matchs[2] + '\' at line: ' + index.toString());
+        }
+
+        const val = parseInt(<string>sfrMap.get(matchs[2]))
+            + parseInt(matchs[3]);
+        replacer = replacer.replace('${value}', '0x' + val.toString(16));
+
+        line = line.replace(matchs[0], replacer);
+        return line;
+    }
+
+    return line;
+}

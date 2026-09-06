@@ -1,0 +1,279 @@
+{
+    "title": "Keil C51 Compile options",
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "type": "object",
+    "definitions": {
+        "misc-controls": {
+            "markdownDescription": "Custom Options",
+            "description.zh-cn": "自定义选项",
+            "size": "huge",
+            "type": "string",
+            "default": ""
+        }
+    },
+    "properties": {
+        "beforeBuildTasks": {
+            "markdownDescription": "List of commands to execute before build",
+            "description.zh-cn": "构建前要执行的命令列表",
+            "type": "array",
+            "default": [
+                {
+                    "name": "clean",
+                    "command": "del /Q \"${OutDir}\\*.*\""
+                }
+            ],
+            "items": {
+                "type": "object",
+                "required": [
+                    "name",
+                    "command"
+                ],
+                "properties": {
+                    "name": {
+                        "markdownDescription": "A readable name for display",
+                        "description.zh-cn": "用于显示的可读名称",
+                        "type": "string"
+                    },
+                    "command": {
+                        "markdownDescription": "Shell command line",
+                        "description.zh-cn": "Shell 命令行",
+                        "type": "string"
+                    },
+                    "disable": {
+                        "markdownDescription": "Disable this command",
+                        "description.zh-cn": "禁用此命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    },
+                    "abortAfterFailed": {
+                        "markdownDescription": "Whether to skip subsequent commands if this command failed",
+                        "description.zh-cn": "是否在此命令失败时，跳过后续的命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    },
+                    "stopBuildAfterFailed": {
+                        "markdownDescription": "Whether to stop compiling directly when this command failed",
+                        "description.zh-cn": "是否在此命令失败时，直接停止编译",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    }
+                }
+            }
+        },
+        "afterBuildTasks": {
+            "markdownDescription": "List of commands to execute after build",
+            "description.zh-cn": "构建结束后要执行的命令列表",
+            "type": "array",
+            "default": [
+                {
+                    "name": "clean",
+                    "command": "del \"${OutDir}\\*._*\""
+                }
+            ],
+            "items": {
+                "type": "object",
+                "required": [
+                    "name",
+                    "command"
+                ],
+                "properties": {
+                    "name": {
+                        "markdownDescription": "A readable name for display",
+                        "description.zh-cn": "用于显示的可读名称",
+                        "type": "string"
+                    },
+                    "command": {
+                        "markdownDescription": "Shell command line",
+                        "description.zh-cn": "Shell 命令行",
+                        "type": "string"
+                    },
+                    "disable": {
+                        "markdownDescription": "Disable this command",
+                        "description.zh-cn": "禁用此命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    },
+                    "abortAfterFailed": {
+                        "markdownDescription": "Whether to skip subsequent commands if this command failed",
+                        "description.zh-cn": "是否在此命令失败时，跳过后续的命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    }
+                }
+            }
+        },
+        "global": {
+            "markdownDescription": "Global Options",
+            "description.zh-cn": "全局选项",
+            "type": "object",
+            "properties": {
+                "ram-mode": {
+                    "type": "string",
+                    "markdownDescription": "RAM Mode",
+                    "description.zh-cn": "RAM 模式",
+                    "default": "SMALL",
+                    "enum": [
+                        "SMALL",
+                        "COMPACT",
+                        "LARGE"
+                    ],
+                    "enumDescriptions": [
+                        "SMALL (vars in DATA)",
+                        "COMPACT (vars in PDATA)",
+                        "LARGE (vars in XDATA)"
+                    ]
+                },
+                "rom-mode": {
+                    "type": "string",
+                    "markdownDescription": "ROM Mode",
+                    "description.zh-cn": "ROM 模式",
+                    "default": "LARGE",
+                    "enum": [
+                        "SMALL",
+                        "COMPACT",
+                        "LARGE"
+                    ],
+                    "enumDescriptions": [
+                        "SMALL (program 2K or less)",
+                        "COMPACT (2K functions, 64K program)",
+                        "LARGE (64K program)"
+                    ]
+                }
+            }
+        },
+        "c/cpp-compiler": {
+            "markdownDescription": "C Compiler Options",
+            "description.zh-cn": "C 编译器选项",
+            "type": "object",
+            "properties": {
+                "optimization-type": {
+                    "type": "string",
+                    "readable_name": "Optimization Type",
+                    "readable_name.zh-cn": "优化类型",
+                    "markdownDescription": "Code optimization focuses on types",
+                    "description.zh-cn": "代码优化的侧重类型",
+                    "default": "SPEED",
+                    "enum": [
+                        "SPEED",
+                        "SIZE"
+                    ]
+                },
+                "optimization-level": {
+                    "type": "string",
+                    "markdownDescription": "Optimization Level",
+                    "description.zh-cn": "优化级别",
+                    "default": "level-8",
+                    "enum": [
+                        "level-0",
+                        "level-1",
+                        "level-2",
+                        "level-3",
+                        "level-4",
+                        "level-5",
+                        "level-6",
+                        "level-7",
+                        "level-8",
+                        "level-9"
+                    ],
+                    "enumDescriptions": [
+                        "Lv0: Constant folding",
+                        "Lv1: Dead code elimination",
+                        "Lv2: Data overlaying",
+                        "Lv3: Peephole optimization",
+                        "Lv4: Register variables",
+                        "Lv5: Common subexpression elimination",
+                        "Lv6: Loop rotation",
+                        "Lv7: Extended index access optimizing",
+                        "Lv8: Reuse common entry code",
+                        "Lv9: Common block subroutines"
+                    ]
+                },
+                "misc-controls": {
+                    "markdownDescription": "Other C Compiler Options",
+                    "description.zh-cn": "C 编译器附加选项",
+                    "$ref": "#/definitions/misc-controls"
+                }
+            }
+        },
+        "asm-compiler": {
+            "markdownDescription": "Assembler Options",
+            "description.zh-cn": "汇编器选项",
+            "type": "object",
+            "properties": {
+                "misc-controls": {
+                    "markdownDescription": "Other Assembler Options",
+                    "description.zh-cn": "汇编器附加选项",
+                    "$ref": "#/definitions/misc-controls"
+                }
+            }
+        },
+        "linker": {
+            "markdownDescription": "Linker Options",
+            "description.zh-cn": "链接器选项",
+            "type": "object",
+            "properties": {
+                "remove-unused": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Remove unused code/data segments",
+                    "description.zh-cn": "删除未使用的程序和数据段"
+                },
+                "output-format": {
+                    "type": "string",
+                    "default": "elf",
+                    "description": "Output Format",
+                    "description.zh-cn": "输出格式",
+                    "enum": [
+                        "elf",
+                        "lib"
+                    ],
+                    "enumDescriptions": [
+                        "OBJ",
+                        "LIB"
+                    ]
+                },
+                "use-RTX": {
+                    "type": "string",
+                    "default": "None",
+                    "description": "Use RTX operation system",
+                    "description.zh-cn": "使用 RTX 操作系统",
+                    "enum": [
+                        "None",
+                        "RTX-Full",
+                        "RTX-Tiny"
+                    ]
+                },
+                "disable-warnings": {
+                    "type": "array",
+                    "description": "Disable specific warning",
+                    "description.zh-cn": "屏蔽特定的警告",
+                    "default": [],
+                    "items": {
+                        "type": "string",
+                        "pattern": "\\d+"
+                    }
+                },
+                "misc-controls": {
+                    "markdownDescription": "Other Linker Options",
+                    "description.zh-cn": "链接器附加选项",
+                    "$ref": "#/definitions/misc-controls"
+                }
+            }
+        }
+    }
+}

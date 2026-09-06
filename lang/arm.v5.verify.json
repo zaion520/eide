@@ -1,0 +1,485 @@
+{
+    "title": "ARM Compiler V5 Options",
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "type": "object",
+    "properties": {
+        "beforeBuildTasks": {
+            "markdownDescription": "List of commands to execute before build",
+            "description.zh-cn": "构建前要执行的命令列表",
+            "type": "array",
+            "default": [
+                {
+                    "name": "clean",
+                    "command": "del /Q \"${OutDir}\\*.*\""
+                }
+            ],
+            "items": {
+                "type": "object",
+                "required": [
+                    "name",
+                    "command"
+                ],
+                "properties": {
+                    "name": {
+                        "markdownDescription": "A readable name for display",
+                        "description.zh-cn": "用于显示的可读名称",
+                        "type": "string"
+                    },
+                    "command": {
+                        "markdownDescription": "Shell command line",
+                        "description.zh-cn": "Shell 命令行",
+                        "type": "string"
+                    },
+                    "disable": {
+                        "markdownDescription": "Disable this command",
+                        "description.zh-cn": "禁用此命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    },
+                    "abortAfterFailed": {
+                        "markdownDescription": "Whether to skip subsequent commands if this command failed",
+                        "description.zh-cn": "是否在此命令失败时，跳过后续的命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    },
+                    "stopBuildAfterFailed": {
+                        "markdownDescription": "Whether to stop compiling directly when this command failed",
+                        "description.zh-cn": "是否在此命令失败时，直接停止编译",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    }
+                }
+            }
+        },
+        "afterBuildTasks": {
+            "markdownDescription": "List of commands to execute after build",
+            "description.zh-cn": "构建结束后要执行的命令列表",
+            "type": "array",
+            "default": [
+                {
+                    "name": "clean",
+                    "command": "del \"${OutDir}\\*._*\""
+                }
+            ],
+            "items": {
+                "type": "object",
+                "required": [
+                    "name",
+                    "command"
+                ],
+                "properties": {
+                    "name": {
+                        "markdownDescription": "A readable name for display",
+                        "description.zh-cn": "用于显示的可读名称",
+                        "type": "string"
+                    },
+                    "command": {
+                        "markdownDescription": "Shell command line",
+                        "description.zh-cn": "Shell 命令行",
+                        "type": "string"
+                    },
+                    "disable": {
+                        "markdownDescription": "Disable this command",
+                        "description.zh-cn": "禁用此命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    },
+                    "abortAfterFailed": {
+                        "markdownDescription": "Whether to skip subsequent commands if this command failed",
+                        "description.zh-cn": "是否在此命令失败时，跳过后续的命令",
+                        "type": "boolean",
+                        "enum": [
+                            true,
+                            false
+                        ]
+                    }
+                }
+            }
+        },
+        "global": {
+            "markdownDescription": "Global Options",
+            "description.zh-cn": "全局选项",
+            "type": "object",
+            "properties": {
+                "use-microLIB": {
+                    "markdownDescription": "Use MicroLIB",
+                    "description.zh-cn": "Use MicroLIB",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "big-endian": {
+                    "markdownDescription": "Big Endian",
+                    "description.zh-cn": "Big Endian",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "output-debug-info": {
+                    "markdownDescription": "Output debug information",
+                    "description.zh-cn": "输出调试信息",
+                    "type": "string",
+                    "default": "disable",
+                    "enum": [
+                        "disable",
+                        "enable"
+                    ]
+                }
+            }
+        },
+        "c/cpp-compiler": {
+            "markdownDescription": "C/C++ Compiler Options",
+            "description.zh-cn": "C/C++ 编译器选项",
+            "type": "object",
+            "properties": {
+                "optimization": {
+                    "markdownDescription": "Optimization Level",
+                    "description.zh-cn": "代码优化级别",
+                    "type": "string",
+                    "default": "level-0",
+                    "enum": [
+                        "level-0",
+                        "level-1",
+                        "level-2",
+                        "level-3"
+                    ],
+                    "enumDescriptions": [
+                        "-O0",
+                        "-O1",
+                        "-O2",
+                        "-O3"
+                    ]
+                },
+                "optimize-for-time": {
+                    "markdownDescription": "Optimize For Time",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "one-elf-section-per-function": {
+                    "markdownDescription": "One ELF Section per Function",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "split-load-and-store-multiple": {
+                    "markdownDescription": "Split Load and Store Multiple",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "c99-mode": {
+                    "markdownDescription": "C99 Mode",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "gnu-extensions": {
+                    "markdownDescription": "GNU Extensions",
+                    "description.zh-cn": "GNU 扩展",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "enum-container-always-int": {
+                    "markdownDescription": "Enum container always int",
+                    "description.zh-cn": "枚举类型的成员变量类型为 int 型",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "plain-char-is-signed": {
+                    "markdownDescription": "Plain Char is Signed",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "warnings": {
+                    "markdownDescription": "Warning Level",
+                    "description.zh-cn": "警告等级",
+                    "type": "string",
+                    "default": "unspecified",
+                    "enum": [
+                        "unspecified",
+                        "no-warnings",
+                        "all-warnings"
+                    ]
+                },
+                "strict-ANSI-C": {
+                    "markdownDescription": "strict ANSI C",
+                    "description.zh-cn": "strict ANSI C",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "execute-only-code": {
+                    "markdownDescription": "Execute-only Code",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "read-only-position-independent": {
+                    "markdownDescription": "Generation of Read-Only Position-Independent (ROPI) code",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "read-write-position-independent": {
+                    "markdownDescription": "Generation of Read/Write Position-Independent (RWPI) code",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "C_FLAGS": {
+                    "markdownDescription": "Other C Compiler Options",
+                    "description.zh-cn": "C 编译器附加选项",
+                    "size": "huge",
+                    "type": "string",
+                    "default": ""
+                },
+                "CXX_FLAGS": {
+                    "markdownDescription": "Other C++ Compiler Options",
+                    "description.zh-cn": "C++ 编译器附加选项",
+                    "size": "huge",
+                    "type": "string",
+                    "default": ""
+                }
+            }
+        },
+        "asm-compiler": {
+            "markdownDescription": "Assembler Options",
+            "description.zh-cn": "汇编器选项",
+            "type": "object",
+            "properties": {
+                "defines": {
+                    "readable_name": "Preprocessor Definitions",
+                    "readable_name.zh-cn": "预处理器定义",
+                    "markdownDescription": "Macro Defines",
+                    "description.zh-cn": "宏定义",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "split-load-and-store-multiple": {
+                    "markdownDescription": "Split Load and Store Multiple",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "thumb-mode": {
+                    "markdownDescription": "Thumb Mode",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "no-warnings": {
+                    "markdownDescription": "No Warnings",
+                    "description.zh-cn": "屏蔽警告",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "execute-only-code": {
+                    "markdownDescription": "Execute-only Code",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "read-only-position-independent": {
+                    "markdownDescription": "Generation of Read-Only Position-Independent (ROPI) code",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "read-write-position-independent": {
+                    "markdownDescription": "Generation of Read/Write Position-Independent (RWPI) code",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "misc-controls": {
+                    "markdownDescription": "Other Assembler Options",
+                    "description.zh-cn": "汇编器附加选项",
+                    "size": "huge",
+                    "type": "string",
+                    "default": ""
+                }
+            }
+        },
+        "linker": {
+            "markdownDescription": "Linker Options",
+            "description.zh-cn": "链接器选项",
+            "type": "object",
+            "properties": {
+                "output-format": {
+                    "type": "string",
+                    "default": "elf",
+                    "description": "Output Format",
+                    "description.zh-cn": "输出格式",
+                    "enum": [
+                        "elf",
+                        "lib"
+                    ],
+                    "enumDescriptions": [
+                        "AXF",
+                        "LIB"
+                    ]
+                },
+                "$disableOutputTask": {
+                    "type": "boolean",
+                    "markdownDescription": "Don't Output Hex/Bin/S19 Files",
+                    "description.zh-cn": "不生成 Hex/Bin/S19 等二进制文件",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "$outputTaskExcludes": {
+                    "type": "array",
+                    "markdownDescription": "Don't Output Specific Binary Files",
+                    "description.zh-cn": "不生成指定的二进制文件",
+                    "default": [],
+                    "items": {
+                        "type": "string",
+                        "default": ".bin",
+                        "enum": [
+                            ".bin",
+                            ".hex",
+                            ".s19"
+                        ],
+                        "enumDescriptions": [
+                            "*.bin file",
+                            "*.hex file",
+                            "*.s19 file"
+                        ]
+                    }
+                },
+                "not-search-std-libs": {
+                    "markdownDescription": "Don't Search Standrad Libraries",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "read-only-position-independent": {
+                    "markdownDescription": "Makes the load and execution region containing the RO output section position-independent.",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "read-write-position-independent": {
+                    "markdownDescription": "Makes the load and execution region containing the RW and ZI output section position-independent.",
+                    "type": "boolean",
+                    "enum": [
+                        true,
+                        false
+                    ]
+                },
+                "xo-base": {
+                    "markdownDescription": "X/O Base",
+                    "description.zh-cn": "X/O Base",
+                    "size": "small",
+                    "type": "string"
+                },
+                "ro-base": {
+                    "markdownDescription": "R/O Base",
+                    "description.zh-cn": "R/O Base",
+                    "size": "small",
+                    "type": "string"
+                },
+                "rw-base": {
+                    "markdownDescription": "R/W Base",
+                    "description.zh-cn": "R/W Base",
+                    "size": "small",
+                    "type": "string"
+                },
+                "misc-controls": {
+                    "markdownDescription": "Other Linker Options",
+                    "description.zh-cn": "链接器附加选项",
+                    "size": "huge",
+                    "type": "string",
+                    "default": ""
+                },
+                "object-order": {
+                    "type": "array",
+                    "readable_name": "Object Order",
+                    "readable_name.zh-cn": "Object Order",
+                    "markdownDescription": "Object Order (used to determine the order in which object files are linked)",
+                    "description.zh-cn": "Object Order（用于决定某些 obj 文件的链接顺序）",
+                    "default": [],
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "readable_name": "Pattern",
+                                "description": "A glob pattern (https://github.com/dazinator/DotNet.Glob) to match a object (*.o) file",
+                                "default": "**/your/pattern/for/object/file/path/*.o"
+                            },
+                            "order": {
+                                "type": "number",
+                                "readable_name": "Order",
+                                "description": "An integer number (The smaller the value, the higher the priority)",
+                                "default": 0
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

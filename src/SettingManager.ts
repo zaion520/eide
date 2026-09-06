@@ -1,0 +1,908 @@
+/*
+    MIT License
+
+    Copyright (c) 2019 github0null
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+*/
+
+import * as vscode from 'vscode';
+import * as events from 'events';
+import * as os from 'os';
+import * as ini from 'ini';
+import * as NodePath from 'path';
+
+import { File } from '../lib/node-utility/File';
+import { GlobalEvent } from './GlobalEvents';
+import { ExceptionToMessage, newMessage } from './Message';
+import * as Utility from './utility';
+import { find, exeSuffix, userhome, osType } from './Platform';
+import { WorkspaceManager } from './WorkspaceManager';
+import { ToolchainName } from './ToolchainManager';
+import { view_str$prompt$needReloadToUpdateEnv, WARNING, view_str$prompt$needReload } from './StringTable';
+import { xpackRequireDevTools } from './XpackDevTools';
+
+export enum CheckStatus {
+    All_Verified,
+    Section_Failed,
+    All_Failed
+}
+
+export interface PortSerialOption {
+    defaultPort: string;
+    baudRate: number;
+    dataBits: number;
+    parity: number;
+    stopBits: number;
+    useUnixCRLF: boolean;
+}
+
+let _instance: SettingManager | undefined;
+
+interface INIStatus {
+    [name: string]: boolean;
+}
+
+function formatPath(path: string): string {
+    return path.trim().replace(/\\\s*$/, '');
+}
+
+export class SettingManager {
+
+    public static readonly TAG = 'EIDE';
+
+    private _event: events.EventEmitter;
+    private pathCache: Map<string, string>;
+    private envPathCache: Map<string, string>;
+    private eideEnv: Map<string, string>;
+
+    private _checkStatus: INIStatus = {
+        'MDK': false,
+        'C51': false
+    };
+
+    private constructor(context?: vscode.ExtensionContext) {
+
+        this._event = new events.EventEmitter();
+
+        this.pathCache = new Map();
+        this.envPathCache = new Map();
+        this.eideEnv = new Map();
+
+        if (context == undefined) {
+            throw new Error('eide context is undefined !');
+        }
+
+        /* add env */
+        this.eideEnv.set('${eideRoot}', context.extensionPath);
+        this.eideEnv.set('${userRoot}', userhome());
+        this.eideEnv.set('${userHome}', userhome());
+
+        try {
+            this.refreshMDKStatus();
+            this.refreshC51Status();
+        } catch (error) {
+            GlobalEvent.log_warn(error);
+        }
+
+        vscode.workspace.onDidChangeConfiguration((e) => {
+
+            if (e.affectsConfiguration(SettingManager.TAG)) {
+
+                try {
+
+                    if (e.affectsConfiguration('EIDE.ARM.INI.Path')) {
+                        this.refreshMDKStatus();
+                    }
+
+                    if (e.affectsConfiguration('EIDE.C51.INI.Path')) {
+                        this.refreshC51Status();
+                    }
+
+                    if (e.affectsConfiguration('EIDE.Builder.EnvironmentVariables')) {
+                        this.syncGlobalEnvVariablesToNodeEnv();
+                    }
+
+                    if (e.affectsConfiguration('EIDE.Win32.Msys.Enable')) {
+                        Utility.notifyReloadWindow(view_str$prompt$needReloadToUpdateEnv);
+                    }
+
+                    if (e.affectsConfiguration('EIDE.MCP.Server.Enable')) {
+                        Utility.notifyReloadWindow(view_str$prompt$needReload);
+                    }
+
+                    //! 暂时弃用 ccache
+                    // // for non-win32 platform, we provide a check when user want to use 'ccache'
+                    // if (osType() != 'win32') {
+                    //     if (e.affectsConfiguration('EIDE.Option.ccache')) {
+                    //         const sel = this.getConfiguration().get<string>('Option.ccache');
+                    //         if (sel !== 'never') {
+                    //             const path = find(`ccache${exeSuffix()}`);
+                    //             if (!path) {
+                    //                 vscode.window.showWarningMessage(
+                    //                     `${WARNING}: not found 'ccache', please install it by system packages manager.`);
+                    //             }
+                    //         }
+                    //     }
+                    // }
+
+                } catch (error) {
+                    GlobalEvent.log_warn(error);
+                }
+
+                this._event.emit('onChanged', e);
+            }
+        });
+    }
+
+    static instance(context?: vscode.ExtensionContext): SettingManager {
+        if (_instance === undefined)
+            _instance = new SettingManager(context);
+        return _instance;
+    }
+
+    /**
+     * @deprecated please use `instance()` instead of it.
+    */
+    static GetInstance(context?: vscode.ExtensionContext): SettingManager {
+        if (_instance === undefined) {
+            _instance = new SettingManager(context);
+        }
+        return _instance;
+    }
+
+    on(event: 'onChanged', listener: (e: vscode.ConfigurationChangeEvent) => void): void;
+    on(event: any, listener: (arg?: any) => void): void {
+        this._event.on(event, listener);
+    }
+
+    once(event: 'onChanged', listener: (e: vscode.ConfigurationChangeEvent) => void): void;
+    once(event: any, listener: (arg?: any) => void): void {
+        this._event.once(event, listener);
+    }
+
+    trimSettingTag(setting_id: string): string {
+        return setting_id.replace(SettingManager.TAG + '.', '');
+    }
+
+    getConfiguration(): vscode.WorkspaceConfiguration {
+        return vscode.workspace.getConfiguration(SettingManager.TAG);
+    }
+
+    setConfigValue(key: string, val: any) {
+        this.getConfiguration().update(key, val, vscode.ConfigurationTarget.Global);
+    }
+
+    private _formatPathForPluginSettings(path_: string): string {
+
+        const wsRoot = WorkspaceManager.getInstance().getWorkspaceRoot();
+
+        if (wsRoot && !this.eideEnv.has('${workspaceFolder}')) {
+            this.eideEnv.set('${workspaceFolder}', wsRoot.path);
+        }
+
+        this.eideEnv.forEach((value, key) => {
+            const regExpr = key.replace('$', '\\$')
+                .replace('{', '\\{')
+                .replace('}', '\\}');
+            path_ = path_.replace(new RegExp(regExpr, 'gi'), value);
+        });
+
+        if (!NodePath.isAbsolute(path_) && wsRoot) {
+            path_ = wsRoot.path + File.sep + path_;
+        }
+
+        return path_;
+    }
+
+    /**
+     * 800:"workbench.action.openSettings"
+     * 801:"workbench.action.openSettings2"
+     * 802:"workbench.action.openSettingsJson"
+     */
+    static async jumpToSettings(name: string) {
+        await vscode.commands.executeCommand('workbench.action.openSettings', name);
+    }
+
+    //------------------------- MCP --------------------------
+
+    isMcpServerEnable(): boolean {
+        return this.getConfiguration().get<boolean>('MCP.Server.Enable') || false;
+    }
+
+    getMcpServerPort(): number {
+        return this.getConfiguration().get<number>('MCP.Server.Port') || 8940;
+    }
+
+    //------------------------- source tree --------------------------
+
+    isAutoSearchIncludePath(): boolean {
+        return this.getConfiguration().get<boolean>('SourceTree.AutoSearchIncludePath') || false;
+    }
+
+    isAutoSearchObjFile(): boolean {
+        return this.getConfiguration().get<boolean>('SourceTree.AutoSearchObjFile') || false;
+    }
+
+    //------------------------- env and path --------------------------
+
+    private getFullPathByPluginConfig(configName: string): string | undefined {
+        const path = this.getConfiguration().get<string>(configName);
+        if (path) {
+            const p = Utility.formatPath(this._formatPathForPluginSettings(path));
+            if (File.IsExist(p)) {
+                return p;
+            }
+        }
+    }
+
+    private findExePathInSystemEnv(exeName: string): string | undefined {
+
+        if (this.envPathCache.has(exeName)) {
+            return <string>this.envPathCache.get(exeName);
+        }
+
+        else {
+            const absPath = find(exeName);
+            if (absPath) {
+                this.envPathCache.set(exeName, absPath);
+                return absPath;
+            }
+        }
+    }
+
+    private findExeDirInSystemEnv(exeName: string): string | undefined {
+
+        if (this.envPathCache.has(exeName)) {
+            return <string>this.envPathCache.get(exeName);
+        }
+
+        else {
+            const absPath = find(exeName);
+            if (absPath) {
+                const dirpath = NodePath.dirname(absPath);
+                this.envPathCache.set(exeName, dirpath);
+                return dirpath;
+            }
+        }
+    }
+
+    private findGccCompilerRootInSystemEnv(gccName: string): string | undefined {
+
+        if (this.envPathCache.has(gccName)) {
+            return <string>this.envPathCache.get(gccName);
+        }
+
+        else {
+            const absPath = find(gccName);
+            if (absPath) {
+                const dirName = NodePath.dirname(NodePath.dirname(absPath));
+                this.envPathCache.set(gccName, dirName);
+                return dirName;
+            }
+        }
+    }
+
+    //--------------------- Global Option ------------------------
+
+    isEnableClangdConfigGenerator(): boolean {
+        return this.getConfiguration().get<boolean>('Option.EnableClangdConfigGenerator') || false;
+    }
+
+    isSilentBuildOrFlash(): boolean {
+        return this.getConfiguration().get<boolean>('Option.SilentWhenBuildOrFlash') || false;
+    }
+
+    syncGlobalEnvVariablesToNodeEnv() {
+        const envs = this.getGlobalEnvVariables();
+        for (const key in envs) {
+            process.env[key] = envs[key];
+        }
+    }
+
+    getGlobalEnvVariables(): { [key: string]: string } {
+        const lines = this.getConfiguration().get<string[]>('Builder.EnvironmentVariables') || [];
+        const result: { [key: string]: string } = {};
+        for (const _line of lines) {
+            const str = _line.trim();
+            if (str.startsWith('#'))
+                continue;
+            const sep_idx = str.indexOf('=');
+            if (sep_idx == -1)
+                continue;
+            const k = str.substring(0, sep_idx).trim();
+            if (!/^\w+$/.test(k))
+                continue;
+            const v = str.substring(sep_idx + 1).trim();
+            if (v) {
+                result[k] = v;
+            }
+        }
+        return result;
+    }
+
+    getForceIncludeList(): string[] {
+        return this.getConfiguration().get<string[]>('Cpptools.ForceInclude') || [];
+    }
+
+    //! 暂时弃用 ccache
+    // "EIDE.Option.ccache": {
+    //     "type": "string",
+    //     "scope": "resource",
+    //     "markdownDescription": "%settings.enable.ccache%",
+    //     "default": "never",
+    //     "enum": [
+    //         "auto",
+    //         "always",
+    //         "never"
+    //     ],
+    //     "enumDescriptions": [
+    //         "Auto",
+    //         "Always Use",
+    //         "Never Use"
+    //     ]
+    // },
+    isEnableCcache(sourceAmount: number): boolean {
+        // const sel = this.getConfiguration().get<string>('Option.ccache');
+        // if (sel === 'always')
+        //     return true;
+        // if (sel === 'auto' && sourceAmount > 500)
+        //     return true;
+        return false;
+    }
+
+    isEnableMsys(): boolean {
+        if (os.platform() != 'win32')
+            return false; //! not support non-win32 platform
+        return this.getConfiguration().get<boolean>('Win32.Msys.Enable') || false;
+    }
+
+    isEnableTelemetry(): boolean {
+        return this.getConfiguration().get<boolean>('Option.EnableTelemetry') || false;
+    }
+
+    isShowOutputFilesInExplorer(): boolean {
+        return true;
+    }
+
+    getBuilderAdditionalCommandLine(): string | undefined {
+        return this.getConfiguration().get<string>('Builder.AdditionalCommandLine');
+    }
+
+    getMapViewParserDepth(): number {
+        return this.getConfiguration().get<number>('Option.MapViewParserDepth') || 0;
+    }
+
+    isDisplaySourceRefs(): boolean {
+        return true;
+    }
+
+    isGenerateMakefileParams(): boolean {
+        return false;
+    }
+
+    isPrintRelativePathWhenBuild(): boolean {
+        return true;
+    }
+
+    getGithubRepositoryToken(): string | undefined {
+        return this.getConfiguration().get<string>('Repository.Template.GithubPersonalToken')?.trim();
+    }
+
+    getGithubRepositoryUrl(): string {
+        return (this.getConfiguration().get<string>('Repository.Template.Url') || 'null')
+            .trim().replace(/^https:\/\//i, '');
+    }
+
+    getCmsisPackRepositoryUrl(): string {
+        return (this.getConfiguration().get<string>('Repository.CmsisPack.Url') || 'null')
+            .trim().replace(/^https:\/\//i, '');
+    }
+
+    getExternalToolsIndexUrl(): string | undefined {
+        const url = this.getConfiguration().get<string>('ExternalTools.IndexUrl');
+        if (url) {
+            return url.trim();
+        }
+    }
+
+    isUseGithubProxy(): boolean {
+        return this.getConfiguration().get<boolean>('Repository.UseProxy') || false;
+    }
+
+    isUseTaskToBuild(): boolean {
+        return this.getConfiguration().get<boolean>('Option.UseTaskToBuild') || false;
+    }
+
+    isKeilC51IniReady(): boolean {
+        return this._checkStatus['C51'];
+    }
+
+    isMDKIniReady(): boolean {
+        return this._checkStatus['MDK'];
+    }
+
+    isInsertCommandsAtBegin(): boolean {
+        return this.getConfiguration().get<boolean>('Option.InsertExtraCommandsAtBegin') || false;
+    }
+
+    getCppcheckerExe(): string | undefined {
+        return this.getFullPathByPluginConfig('Cppcheck.ExecutablePath')
+            || this.findExePathInSystemEnv('cppcheck');
+    }
+
+    //----------------------------- Flasher --------------------------------
+
+    getJlinkDir(): string {
+        // on linux: `/usr/bin/JLinkExe`
+        // on Windows: `C:\Program Files (x86)\SEGGER\JLink\JLink.exe`
+        return this.getFullPathByPluginConfig('JLink.InstallDirectory')
+            || this.findExeDirInSystemEnv(osType() === 'win32' ? 'JLink' : 'JLinkExe')
+            || 'null';
+    }
+
+    getJlinkExePath(): string {
+        const dir = this.getJlinkDir();
+        const name = osType() === 'win32' ? 'JLink.exe' : 'JLinkExe';
+        if (dir == 'null')
+            return name;
+        return NodePath.join(dir, name);
+    }
+
+    getStvpExePath(): string {
+        return this.getFullPathByPluginConfig('STM8.STVP.CliExePath')
+            || this.findExePathInSystemEnv('STVP_CmdLine')
+            || 'null';
+    }
+
+    getSTLinkExePath(): string {
+        return this.getFullPathByPluginConfig('STLink.ExePath')
+            || this.findExePathInSystemEnv('STM32_Programmer_CLI')
+            || this.findExePathInSystemEnv('ST-LINK_CLI')
+            || 'null';
+    }
+
+    getOpenOCDExePath(): string {
+        try {
+            if (vscode.workspace.workspaceFile) {
+                const dir = File.from(NodePath.dirname(vscode.workspace.workspaceFile.fsPath));
+                const r = xpackRequireDevTools(dir, 'openocd');
+                if (r) {
+                    return File.from(r.path, 'bin', `openocd${exeSuffix()}`).path;
+                }
+            }
+        } catch (error) {
+            GlobalEvent.log_warn(<Error>error);
+            return `<xpack-dev-tools openocd not-exist>`;
+        }
+        return this.getFullPathByPluginConfig('OpenOCD.ExePath')
+            || this.findExePathInSystemEnv('openocd')
+            || 'null';
+    }
+
+    //--------------------------COSMIC-----------------------------
+
+    getCosmicStm8ToolsDir(): File {
+
+        const p = this.getFullPathByPluginConfig('STM8.COSMIC.InstallDirectory');
+        if (p) {
+            return new File(p);
+        }
+
+        const execName = 'cxstm8';
+
+        if (this.envPathCache.has(execName)) {
+            return new File(<string>this.envPathCache.get(execName))
+        }
+
+        else {
+            const absPath = find(execName);
+            if (absPath) {
+                const dirName = NodePath.dirname(absPath);
+                this.envPathCache.set(execName, dirName);
+                return new File(dirName);
+            }
+        }
+
+        return new File('null');
+    }
+
+    //-----------------------------IAR-------------------------------
+
+    getIARForStm8Dir(): File {
+
+        const p = this.getFullPathByPluginConfig('IAR.STM8.InstallDirectory');
+        if (p) {
+            return new File(p);
+        }
+
+        const execName = 'iccstm8';
+
+        if (this.envPathCache.has(execName)) {
+            return new File(<string>this.envPathCache.get(execName))
+        }
+
+        else {
+            const absPath = find(execName);
+            if (absPath) {
+                const dirName = NodePath.dirname(NodePath.dirname(NodePath.dirname(absPath)));
+                this.envPathCache.set(execName, dirName);
+                return new File(dirName);
+            }
+        }
+
+        return new File('null');
+    }
+
+    getIarForArmDir(): File {
+        return new File(
+            this.getFullPathByPluginConfig('IAR.ARM.Toolchain.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv('iccarm') ||
+            'null'
+        );
+    }
+
+    //---------------------------- ARM ----------------------------
+
+    isUseMultithreadMode(): boolean {
+        return this.getConfiguration().get<number>('Builder.ThreadNumber') != 1;
+    }
+
+    getThreadNumber(): number {
+        const num = this.getConfiguration().get<number>('Builder.ThreadNumber') || -1;
+        if (num <= 0) { return os.cpus().length; }
+        return num;
+    }
+
+    //! deprecated.
+    // IsConvertAxf2Elf(): boolean {
+    //     return this.getConfiguration().get<boolean>('ARM.Option.AxfToElf') || false;
+    // }
+
+    IsAutoGenerateRTEHeader(): boolean {
+        return this.getConfiguration().get<boolean>('ARM.Option.AutoGenerateRTE_Components') || false;
+    }
+
+    getGCCPrefix(): string {
+        return this.getConfiguration().get<string>('ARM.GCC.Prefix') || '';
+    }
+
+    getGCCDir(): File {
+        try {
+            if (vscode.workspace.workspaceFile) {
+                const dir = File.from(NodePath.dirname(vscode.workspace.workspaceFile.fsPath));
+                const r = xpackRequireDevTools(dir, `${this.getGCCPrefix()}gcc`);
+                if (r) {
+                    return r;
+                }
+            }
+        } catch (error) {
+            GlobalEvent.log_warn(<Error>error);
+            return File.from(`<xpack-dev-tools ${this.getGCCPrefix()}gcc not-exist>`);
+        }
+        return new File(
+            this.getFullPathByPluginConfig('ARM.GCC.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv(`${this.getGCCPrefix()}gcc`) ||
+            'null'
+        );
+    }
+
+    // ---
+
+    getLLVMArmDir(): File {
+        return new File(
+            this.getFullPathByPluginConfig('ARM.LLVM.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv('clang') ||
+            'null'
+        );
+    }
+
+    // ---
+
+    getArmcc5Dir(): File {
+        return new File(
+            this.getFullPathByPluginConfig('ARM.ARMCC5.InstallDirectory') ||
+            this.pathCache.get('ARMCC5') ||
+            this.findGccCompilerRootInSystemEnv('armcc') ||
+            'null'
+        );
+    }
+
+    getArmcc6Dir(): File {
+        return new File(
+            this.getFullPathByPluginConfig('ARM.ARMCC6.InstallDirectory') ||
+            this.pathCache.get('ARMCC6') ||
+            this.findGccCompilerRootInSystemEnv('armclang') ||
+            'null'
+        );
+    }
+
+    SetMdkIniOrUv4Path(path: string) {
+        this.setConfigValue('ARM.INI.Path', path);
+    }
+
+    private GetMdkINIOrUv4File(): File {
+        const iniPath = this.getConfiguration().get<string>('ARM.INI.Path') || '';
+        return new File(Utility.formatPath(iniPath));
+    }
+
+    GetMdkArmDir(): File | undefined {
+        const path = this.pathCache.get('MDK');
+        if (path) {
+            return new File(path);
+        }
+    }
+
+    private refreshMDKStatus(): void {
+
+        /* parse from ini file */
+        const iniFile = this.GetMdkINIOrUv4File();
+
+        if (iniFile.IsFile()) {
+
+            // is uv4.exe
+            if (iniFile.suffix.toLowerCase() == '.exe') {
+
+                const armccDir = File.fromArray([NodePath.dirname(iniFile.dir), 'ARM', 'ARMCC']);
+                const armclangDir = File.fromArray([NodePath.dirname(iniFile.dir), 'ARM', 'ARMCLANG']);
+
+                let cnt = 0;
+
+                if (armccDir.IsDir()) { this.pathCache.set('ARMCC5', armccDir.path); cnt++; };
+                if (armclangDir.IsDir()) { this.pathCache.set('ARMCC6', armclangDir.path); cnt++; }
+
+                if (cnt > 0) {
+                    this._checkStatus['MDK'] = true;
+                    return;
+                }
+            }
+
+            // is ini
+            else {
+
+                const iniData = ini.parse(iniFile.Read());
+
+                if (iniData["ARM"] && iniData["ARM"]["PATH"]) {
+
+                    // mdk ARM dir
+                    const mdkArmDir = new File(formatPath((<string>iniData["ARM"]["PATH"]).replace(/"/g, '')));
+
+                    // cache arm dir
+                    if (mdkArmDir.IsDir()) {
+                        this.pathCache.set('MDK', mdkArmDir.path);
+                    }
+
+                    let cnt = 0;
+
+                    // cache armcc5 path
+                    const armcc5Dir = File.fromArray([mdkArmDir.path, 'ARMCC', 'bin']);
+                    if (armcc5Dir.IsDir()) { this.pathCache.set('ARMCC5', armcc5Dir.dir); cnt++; }
+
+                    // cache armcc6 path
+                    const armcc6Dir = File.fromArray([mdkArmDir.path, 'ARMCLANG', 'bin']);
+                    if (armcc6Dir.IsDir()) { this.pathCache.set('ARMCC6', armcc6Dir.dir); cnt++; }
+
+                    // check all
+                    if (cnt > 0) {
+                        this._checkStatus['MDK'] = true;
+                        return; // mdk path is ok, return
+                    }
+                }
+            }
+        }
+
+        /* parse from env */
+        if (process.env && process.env['Keil_Root']) {
+            const rootFolder = Utility.formatPath(process.env['Keil_Root']);
+            const armFolder = File.fromArray([rootFolder, 'ARM']);
+            if (armFolder.IsDir() &&
+                File.fromArray([armFolder.path, 'ARMCC']).IsDir()) {
+                this.pathCache.set('MDK', armFolder.path);
+                this._checkStatus['MDK'] = true;
+                return; /* found it, exit */
+            }
+        }
+
+        // not found any path
+        this.pathCache.delete('ARMCC5');
+        this.pathCache.delete('ARMCC6');
+        this._checkStatus['MDK'] = false;
+    }
+
+    //------------------------------- SDCC --------------------------------
+
+    getSdccDir(): File {
+        return new File(
+            this.getFullPathByPluginConfig('SDCC.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv('sdcc') ||
+            'null'
+        );
+    }
+
+    getGnuSdccStm8Dir(): File {
+        return new File('null'); // disabled
+    }
+
+    getGnuSdccMcs51Dir(): File {
+        return new File(
+            this.getFullPathByPluginConfig('SDCC.GNU_MCS51.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv('i51-elf-as') ||
+            'null'
+        );
+    }
+
+    //------------------------------- RISC-V ----------------------------------
+
+    getRiscvToolFolder(): File {
+        try {
+            if (vscode.workspace.workspaceFile) {
+                const dir = File.from(NodePath.dirname(vscode.workspace.workspaceFile.fsPath));
+                const r = xpackRequireDevTools(dir, `${this.getRiscvToolPrefix()}gcc`);
+                if (r) {
+                    return r;
+                }
+            }
+        } catch (error) {
+            GlobalEvent.log_warn(<Error>error);
+            return File.from(`<xpack-dev-tools ${this.getRiscvToolPrefix()}gcc not-exist>`);
+        }
+        return new File(
+            this.getFullPathByPluginConfig('RISCV.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv(`${this.getRiscvToolPrefix()}gcc`) ||
+            'null'
+        );
+    }
+
+    getRiscvToolPrefix(): string {
+        return this.getConfiguration().get<string>('RISCV.ToolPrefix') || '';
+    }
+
+    //------------------------------- MTI GCC ----------------------------------
+
+    getMipsToolFolder(): File {
+        try {
+            if (vscode.workspace.workspaceFile) {
+                const dir = File.from(NodePath.dirname(vscode.workspace.workspaceFile.fsPath));
+                const r = xpackRequireDevTools(dir, `${this.getMipsToolPrefix()}gcc`);
+                if (r) {
+                    return r;
+                }
+            }
+        } catch (error) {
+            GlobalEvent.log_warn(<Error>error);
+            return File.from(`<xpack-dev-tools ${this.getMipsToolPrefix()}gcc not-exist>`);
+        }
+        return new File(
+            this.getFullPathByPluginConfig('MIPS.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv(`${this.getMipsToolPrefix()}gcc`) ||
+            'null'
+        );
+    }
+
+    getMipsToolPrefix(): string {
+        return this.getConfiguration().get<string>('MIPS.ToolPrefix') || '';
+    }
+
+    //------------------------------- Any GCC ----------------------------------
+
+    getAnyGccToolFolder(): File {
+        try {
+            if (vscode.workspace.workspaceFile) {
+                const dir = File.from(NodePath.dirname(vscode.workspace.workspaceFile.fsPath));
+                const r = xpackRequireDevTools(dir, `${this.getAnyGccToolPrefix()}gcc`);
+                if (r) {
+                    return r;
+                }
+            }
+        } catch (error) {
+            GlobalEvent.log_warn(<Error>error);
+            return File.from(`<xpack-dev-tools ${this.getAnyGccToolPrefix()}gcc not-exist>`);
+        }
+        return new File(
+            this.getFullPathByPluginConfig('Toolchain.AnyGcc.InstallDirectory') ||
+            this.findGccCompilerRootInSystemEnv(`${this.getAnyGccToolPrefix()}gcc`) ||
+            'null'
+        );
+    }
+
+    getAnyGccToolPrefix(): string {
+        return this.getConfiguration().get<string>('Toolchain.AnyGcc.ToolPrefix') || '';
+    }
+
+    setGccFamilyToolPrefix(id: ToolchainName, newPrefix: string, global?: boolean) {
+
+        const region = global ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
+
+        switch (id) {
+            case 'GCC':
+                this.getConfiguration().update('ARM.GCC.Prefix', newPrefix, region);
+                break;
+            case 'RISCV_GCC':
+                this.getConfiguration().update('RISCV.ToolPrefix', newPrefix, region);
+                break;
+            case 'ANY_GCC':
+                this.getConfiguration().update('Toolchain.AnyGcc.ToolPrefix', newPrefix, region);
+                break;
+            default:
+                break;
+        }
+    }
+
+    //------------------------------- C51 ----------------------------------
+
+    SetC51IniOrUv4Path(path: string) {
+        this.setConfigValue('C51.INI.Path', path);
+    }
+
+    private GetC51INIFile(): File {
+        const iniPath = this.getConfiguration().get<string>('C51.INI.Path') || '';
+        return new File(Utility.formatPath(iniPath));
+    }
+
+    GetC51Dir(): File {
+        return new File(this.pathCache.get('C51') || 'null');
+    }
+
+    private refreshC51Status(): void {
+
+        const iniFile = this.GetC51INIFile();
+
+        if (iniFile.IsFile()) {
+
+            // is uv4.exe
+            if (iniFile.suffix.toLowerCase() == '.exe') {
+                const c51BinDir = File.fromArray([NodePath.dirname(iniFile.dir), 'C51', 'BIN']);
+                if (c51BinDir.IsDir()) {
+                    this.pathCache.set('C51', c51BinDir.dir);
+                    this._checkStatus['C51'] = true;
+                    return;
+                }
+            }
+
+            // is ini file
+            else {
+                const iniData = ini.parse(iniFile.Read());
+                if (iniData["C51"] && iniData["C51"]["PATH"]) {
+                    const c51BinDir = File.fromArray([formatPath((<string>iniData["C51"]["PATH"]).replace(/"/g, '')), 'BIN']);
+                    if (c51BinDir.IsDir()) {
+                        this.pathCache.set('C51', c51BinDir.dir);
+                        this._checkStatus['C51'] = true;
+                        return;
+                    }
+                }
+            }
+        }
+
+        /* parse from env */
+        if (process.env && process.env['Keil_Root']) {
+            const rootFolder = Utility.formatPath(process.env['Keil_Root']);
+            const c51Folder = File.fromArray([rootFolder, 'C51']);
+            if (c51Folder.IsDir() &&
+                File.fromArray([c51Folder.path, 'BIN']).IsDir()) {
+                this.pathCache.set('C51', c51Folder.path);
+                this._checkStatus['C51'] = true;
+                return; /* found it, exit */
+            }
+        }
+
+        // not found any path
+        this.pathCache.delete('C51');
+        this._checkStatus['C51'] = false;
+    }
+}
