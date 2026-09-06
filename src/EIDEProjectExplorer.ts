@@ -4354,6 +4354,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         try {
             this._builderLock = true;
 
+            // .NET runtime (for unify_builder) is checked once per session, on first build
+            try { await require('./extension').ensureDotnetRuntime(); } catch { /* logged inside */ }
+
             // save project before build
             prj.Save(true);
 

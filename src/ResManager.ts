@@ -123,11 +123,7 @@ export class ResManager extends events.EventEmitter {
         this.LoadAppConfig();
         this.loadCache();
 
-        /* delay load */
-        GlobalEvent.on('extension_launch_done', () => {
-            this.loadJlinkDevList();
-            this.loadStm8DevList();
-        });
+
     }
     onDispose() {
         this.saveCache();
@@ -517,11 +513,35 @@ export class ResManager extends events.EventEmitter {
         return <File>this.GetDir('data');
     }
 
+    private devListsLoaded = false;
+
+    /**
+     * 设备列表首次使用时加载,每个会话只跑一次。
+     * loadJlinkDevList 会同步启动 JLink.exe 导出设备库,loadStm8DevList 会启动
+     * stvp 进程,两者在冷启动下可达秒级,因此绝不能放在启动链路上。
+     */
+    ensureDevListsLoaded(): void {
+        if (this.devListsLoaded) { return; }
+        this.devListsLoaded = true;
+        try {
+            this.loadJlinkDevList();
+        } catch (error) {
+            GlobalEvent.log_error(error);
+        }
+        try {
+            this.loadStm8DevList();
+        } catch (error) {
+            GlobalEvent.log_error(error);
+        }
+    }
+
     getJLinkDevList(): CPUInfo[] {
+        this.ensureDevListsLoaded();
         return this.devList;
     }
 
     getJLinkDevByFullName(fullName: string): CPUInfo | undefined {
+        this.ensureDevListsLoaded();
         const devIndex = this.devList.findIndex((dev) => { return fullName.startsWith(dev.cpuName); });
         if (devIndex !== -1) {
             return {
@@ -665,6 +685,7 @@ export class ResManager extends events.EventEmitter {
     }
 
     getStm8DevList(): string[] {
+        this.ensureDevListsLoaded();
         return this.stm8DevList;
     }
 

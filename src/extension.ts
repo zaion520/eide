@@ -25,7 +25,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
-import * as node7z from 'node-7z';
+
 import * as NodePath from 'path';
 import * as ChildProcess from 'child_process';
 import * as yaml from 'yaml';
@@ -36,7 +36,7 @@ import { ProjectExplorer, ProjTreeItem } from './EIDEProjectExplorer';
 import { ResManager } from './ResManager';
 import { LogAnalyzer } from './LogAnalyzer';
 import { ResInstaller } from './ResInstaller';
-import * as mcp from './MCPServer';
+
 
 import {
     ERROR, WARNING, INFORMATION,
@@ -65,6 +65,11 @@ let operationExplorer: OperationExplorer;
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
 export async function activate(context: vscode.ExtensionContext) {
+
+    const tActivateStart = performance.now();
+    const logStartupPhase = (name: string) => {
+        GlobalEvent.log_info(`startup timing: ${name} +${Math.round(performance.now() - tActivateStart)}ms`);
+    };
 
     // init event emiter
     RegisterGlobalEvent();
@@ -101,6 +106,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // init eide components
     const done = await InitComponents(context);
+    logStartupPhase('InitComponents done');
     if (!done) {
         vscode.window.showErrorMessage(`${ERROR} : Install eide binaries failed !, You can download offline [vsix package](https://github.com/github0null/eide/releases) and install it !`);
         return;
@@ -315,7 +321,9 @@ export async function activate(context: vscode.ExtensionContext) {
     projectExplorer.enableAutoSave(true);
 
     // load project in this workspace
+    logStartupPhase('commands registered, loading workspace');
     projectExplorer.loadWorkspace(context.globalState);
+    logStartupPhase('loadWorkspace done');
 
     // hook
     postLaunchHook(context);
@@ -323,6 +331,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // launch done
     GlobalEvent.emit('extension_launch_done');
     GlobalEvent.log_info('Embedded IDE launch done');
+    logStartupPhase('launch done');
 }
 
 // this method is called when your extension is deactivated
@@ -332,10 +341,15 @@ export function deactivate() {
     ResManager.instance().onDispose();
     LogDumper.getInstance().onDispose();
     StatusBarManager.getInstance().disposeAll();
-    mcp.mcpServerStop().catch(err => GlobalEvent.log_error(err));
+    require('./MCPServer').mcpServerStop().catch((err: any) => GlobalEvent.log_error(err));
 }
 
 function postLaunchHook(extensionCtx: vscode.ExtensionContext) {
+
+    const tPostLaunchStart = performance.now();
+    const logPostPhase = (name: string) => {
+        GlobalEvent.log_info(`startup timing: postLaunch ${name} +${Math.round(performance.now() - tPostLaunchStart)}ms`);
+    };
 
     const settingManager = SettingManager.instance();
     const resManager = ResManager.instance();
@@ -392,17 +406,20 @@ function postLaunchHook(extensionCtx: vscode.ExtensionContext) {
     checkAndInstallBuiltPyPkgs()
         .catch(err => GlobalEvent.log_warn(err));
 
-    // MCP
+    // MCP (lazy require: express + MCP SDK are only loaded when the server is enabled)
     if (settingManager.isMcpServerEnable()) {
         const port = settingManager.getMcpServerPort();
         try {
+            const mcp = require('./MCPServer');
             mcp.mcpServerInit(port, projectExplorer);
             mcp.mcpServerStart(port, extensionCtx.extensionPath, extensionCtx.extension.packageJSON.version)
-                .catch(error => GlobalEvent.log_error(error));
+                .catch((error: any) => GlobalEvent.log_error(error));
         } catch (error) {
             GlobalEvent.log_error(error);
         }
     }
+
+    logPostPhase('done (launched tasks are fire-and-forget)');
 }
 
 //////////////////////////////////////////////////
@@ -814,7 +831,8 @@ async function tryInstallBinaries(binFolder: File, binVersion: string): Promise<
                     // make dir
                     binFolder.CreateDir(true);
 
-                    // start unzip
+                    // start unzip (lazy require: only needed when installing binaries)
+                    const node7z: typeof import('node-7z') = require('node-7z');
                     node7z.extractFull(tmpFile.path, binFolder.path, {
                         $bin: ResManager.GetInstance().Get7za().path,
                         $progress: true,
@@ -1249,8 +1267,8 @@ async function InitComponents(context: vscode.ExtensionContext): Promise<boolean
     // binaries patchs
     await patchBinaries();
 
-    // check and install .NET6 runtime
-    await checkAndInstallRuntime();
+    // NOTE: .NET runtime check is deferred to the first build (see ensureDotnetRuntime),
+    // so startup no longer spawns `dotnet` processes.
 
     // register telemetry hook if user enabled
     try {
@@ -1317,6 +1335,18 @@ async function InitComponents(context: vscode.ExtensionContext): Promise<boolean
         vscode.window.registerTerminalLinkProvider(new EideTerminalLinkProvider()));
 
     return true;
+}
+
+let dotnetRuntimeCheckDone = false;
+
+/**
+ * 确保 .NET runtime 可用,每个会话只检查一次。
+ * unify_builder 是 .NET 程序,构建前必须有 runtime;启动时不再检查。
+ */
+export async function ensureDotnetRuntime(): Promise<void> {
+    if (dotnetRuntimeCheckDone) { return; }
+    dotnetRuntimeCheckDone = true;
+    await checkAndInstallRuntime();
 }
 
 function RegisterMsgListener() {

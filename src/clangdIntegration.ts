@@ -676,6 +676,7 @@ export function pregenAllTargetsClangd(prj: AbstractProject): PregenAllTargetsRe
 export function updateClangdIntegration(prj: AbstractProject): void {
     if (!isClangdIntegrationEnabled()) { return; }
 
+    const tStart = Date.now();
     try {
         const toolchainName = prj.getToolchain().name;
         const activeTargetKey = prj.getCurrentTarget();
@@ -688,6 +689,7 @@ export function updateClangdIntegration(prj: AbstractProject): void {
         if (changed) {
             tryRestartClangd();
         }
+        GlobalEvent.log_info(`clangd integration update done +${Date.now() - tStart}ms (changed=${changed})`);
     } catch (error) {
         GlobalEvent.log_error(error);
     }
