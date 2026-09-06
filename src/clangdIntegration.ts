@@ -18,12 +18,13 @@ import type { AbstractProject } from './EIDEProject';
 import { SettingManager } from './SettingManager';
 import { GlobalEvent } from './GlobalEvents';
 import { BuilderOptions } from './EIDETypeDefine';
-import { ToolchainManager } from './ToolchainManager';
+import { ToolchainManager, ToolchainName } from './ToolchainManager';
 import { collectExternalSourceRoots } from './ProjectRootTool';
 import {
-    ClangdTargetContext,
     buildClangdCommandTokens,
-    joinCommandTokens,
+    buildClangdContextForTarget,
+    toCompilationDatabaseEntry,
+    getTargetDbDir,
     asCompileCommandFile,
     isSupportedSourceFile,
     createUserConfigPathMatch,
@@ -37,7 +38,6 @@ import {
     isStm8Toolchain,
     isAc5Toolchain,
     resolveCompatShimKind,
-    getFallbackDefinesForTarget,
 } from './clangdSupport';
 
 export const CLANGD_OUTPUT_DIR_NAME = '.eide-clangd';
@@ -242,10 +242,6 @@ function getClangdUserConfigDir(): string | undefined {
     return home ? path.join(home, '.config', 'clangd') : undefined;
 }
 
-function getProjectOutputDirPath(prj: AbstractProject): string {
-    return prj.ToAbsolutePath(prj.getOutputDir());
-}
-
 function getManagedDbDir(prj: AbstractProject): string {
     return path.join(prj.getProjectRoot().path, CLANGD_OUTPUT_DIR_NAME);
 }
@@ -262,30 +258,6 @@ function writeIfChanged(filePath: string, content: string): boolean {
         GlobalEvent.log_error(error);
         return false;
     }
-}
-
-/** 解析可用于 clangd 的 clang 兼容编译器路径(AC5 借用 AC6 的 armclang 做仿真) */
-function resolveClangdCompilerPath(prj: AbstractProject): string | undefined {
-    const toolchain = prj.getToolchain();
-    try {
-        const gccLikePath = toolchain.getGccFamilyCompilerPathForCpptools('c');
-        if (gccLikePath) { return gccLikePath; }
-    } catch (error) {
-        GlobalEvent.log_error(error);
-    }
-
-    if (isAc5Toolchain(toolchain.name)) {
-        // AC5(armcc)没有 clang 兼容前端,借用 AC6(armclang)目录中的编译器
-        try {
-            const ac6Toolchain = ToolchainManager.getInstance().getToolchain('ARM', 'AC6');
-            const armclangPath = path.join(
-                ac6Toolchain.getToolchainDir().path, 'bin',
-                process.platform === 'win32' ? 'armclang.exe' : 'armclang'
-            );
-            if (fs.existsSync(armclangPath)) { return armclangPath; }
-        } catch (error) { /* AC6 未安装,忽略 */ }
-    }
-    return undefined;
 }
 
 /**
@@ -328,30 +300,95 @@ function lookupSourceParams(sourceParams: any, sourceFile: string): string | und
     return undefined;
 }
 
-function buildClangdContext(prj: AbstractProject, builderParams: any, dbDir: string): ClangdTargetContext {
-    const config = prj.GetConfiguration<any>().config;
-    const tcConfig: any = config.toolchainConfig || {};
-    const options: BuilderOptions = builderParams.options || {};
-    const globalOpts: any = options.global || {};
-    const cOpts: any = options['c/cpp-compiler'] || {};
+// ---------------------------------------------------------------------------
+// 1. compile_commands.json generation
+// ---------------------------------------------------------------------------
 
-    const cpuType: string | undefined = tcConfig.cpuType;
-    const floatingPointHardware: string | undefined = tcConfig.floatingPointHardware;
-
-    // resolve system includes & force headers
-    let systemIncludeList: string[] = [];
+/** 读指定 target 的 builder.params(`build/<target>/builder.params`,磁盘形态,不依赖激活态) */
+function readBuilderParamsForTarget(prj: AbstractProject, targetName: string): any | undefined {
+    const outDirRoot = prj.GetConfiguration<any>().config.outDir || 'build';
+    const paramsPath = path.join(prj.getProjectRoot().path, outDirRoot, targetName, 'builder.params');
     try {
-        systemIncludeList = prj.getToolchain().getSystemIncludeList(options);
+        if (!fs.existsSync(paramsPath)) { return undefined; }
+        return JSON.parse(fs.readFileSync(paramsPath, 'utf8'));
+    } catch (error) {
+        GlobalEvent.log_error(error);
+        return undefined;
+    }
+}
+
+/** 取指定 target 存档的工具链配置(`toolchainConfigMap[toolchain]`,不依赖激活态) */
+function getStoredToolchainConfig(config: any, targetName: string): { toolchain: string; tcConfig: any } | undefined {
+    try {
+        const target = config?.targets?.[targetName];
+        if (!target || typeof target.toolchain !== 'string') { return undefined; }
+        const tcConfig = target.toolchainConfigMap?.[target.toolchain] || {};
+        return { toolchain: target.toolchain, tcConfig };
+    } catch (error) {
+        GlobalEvent.log_error(error);
+        return undefined;
+    }
+}
+
+/** 解析指定工具链的 clang 兼容编译器路径(AC5 借用 AC6 的 armclang 做仿真) */
+function resolveClangdCompilerPathFor(prj: AbstractProject, toolchainName: string): string | undefined {
+    const config = prj.GetConfiguration<any>().config;
+    try {
+        const toolchainObj = ToolchainManager.getInstance().getToolchain(config.type, <ToolchainName>toolchainName);
+        const gccLikePath = toolchainObj.getGccFamilyCompilerPathForCpptools('c');
+        if (gccLikePath) { return gccLikePath; }
     } catch (error) {
         GlobalEvent.log_error(error);
     }
 
-    return {
-        toolchain: builderParams.toolchain,
+    if (isAc5Toolchain(toolchainName)) {
+        // AC5(armcc)没有 clang 兼容前端,借用 AC6(armclang)目录中的编译器
+        try {
+            const ac6Toolchain = ToolchainManager.getInstance().getToolchain('ARM', 'AC6');
+            const armclangPath = path.join(
+                ac6Toolchain.getToolchainDir().path, 'bin',
+                process.platform === 'win32' ? 'armclang.exe' : 'armclang'
+            );
+            if (fs.existsSync(armclangPath)) { return armclangPath; }
+        } catch (error) { /* AC6 未安装,忽略 */ }
+    }
+    return undefined;
+}
+
+/**
+ * 为指定 target 生成 clangd 友好的编译数据库 `.eide-clangd/<target>/compile_commands.json`。
+ * 只读该 target 的磁盘构建参数与存档配置,不切换激活态(批量预生成用)。
+ * @returns 生成的条目数;缺 builder.params(从未构建/切换过)时返回 -1 表示跳过
+ */
+export function generateDbForTarget(prj: AbstractProject, targetName: string): number {
+    const builderParams = readBuilderParamsForTarget(prj, targetName);
+    if (!builderParams || !Array.isArray(builderParams.sourceList)) { return -1; }
+
+    const rootDir = prj.getProjectRoot().path;
+    const config = prj.GetConfiguration<any>().config;
+    const stored = getStoredToolchainConfig(config, targetName);
+    if (!stored) { return -1; }
+
+    const options: BuilderOptions = builderParams.options || {};
+    const globalOpts: any = options.global || {};
+    const cOpts: any = options['c/cpp-compiler'] || {};
+    const tcConfig: any = stored.tcConfig || {};
+
+    let systemIncludeList: string[] = [];
+    try {
+        const toolchainObj = ToolchainManager.getInstance().getToolchain(config.type, <ToolchainName>stored.toolchain);
+        systemIncludeList = toolchainObj.getSystemIncludeList(options);
+    } catch (error) {
+        GlobalEvent.log_error(error);
+    }
+
+    const dbDir = getTargetDbDir(rootDir, targetName);
+    const context = buildClangdContextForTarget({
+        toolchain: stored.toolchain,
         projectType: config.type,
-        compilerPath: resolveClangdCompilerPath(prj),
-        cpuType,
-        floatingPointHardware,
+        compilerPath: resolveClangdCompilerPathFor(prj, stored.toolchain),
+        cpuType: tcConfig.cpuType,
+        floatingPointHardware: tcConfig.floatingPointHardware,
         armThumbMode: tcConfig.armThumbMode,
         useMicroLib: tcConfig.useMicroLib,
         executeOnlyCode: tcConfig.executeOnlyCode,
@@ -361,43 +398,10 @@ function buildClangdContext(prj: AbstractProject, builderParams: any, dbDir: str
         languageC: cOpts['language-c'],
         languageCpp: cOpts['language-cpp'],
         incList: Array.isArray(builderParams.incDirs) ? builderParams.incDirs : [],
-        defineList: [
-            ...getFallbackDefinesForTarget({ cpuType, floatingPointHardware }),
-            ...(Array.isArray(builderParams.defines) ? builderParams.defines : [])
-        ],
+        defineList: Array.isArray(builderParams.defines) ? builderParams.defines : [],
         systemIncludeList,
-        forceIncludeHeaders: resolveForceIncludeHeaders(builderParams.toolchain, dbDir)
-    };
-}
-
-// ---------------------------------------------------------------------------
-// 1. compile_commands.json generation
-// ---------------------------------------------------------------------------
-
-/**
- * 从 builder.params 生成 clangd 友好的编译数据库 `.eide-clangd/compile_commands.json`。
- * builder.params 由 CodeBuilder.getCommands 在每次 UpdateCppConfig/构建时同步写出。
- */
-export function generateClangdCompilationDatabase(prj: AbstractProject): boolean {
-    const outputDirPath = getProjectOutputDirPath(prj);
-    const paramsPath = path.join(outputDirPath, 'builder.params');
-    if (!fs.existsSync(paramsPath)) {
-        return false; // 尚未构建过,跳过(builder.params 会在 UpdateCppConfig 时生成)
-    }
-
-    let builderParams: any;
-    try {
-        builderParams = JSON.parse(fs.readFileSync(paramsPath, 'utf8'));
-    } catch (error) {
-        GlobalEvent.log_error(error);
-        return false;
-    }
-
-    if (!builderParams || !Array.isArray(builderParams.sourceList)) { return false; }
-
-    const rootDir = prj.getProjectRoot().path;
-    const dbDir = getManagedDbDir(prj);
-    const context = buildClangdContext(prj, builderParams, dbDir);
+        forceIncludeHeaders: resolveForceIncludeHeaders(stored.toolchain, dbDir)
+    });
 
     const entries: any[] = [];
     const seen = new Set<string>();
@@ -413,17 +417,39 @@ export function generateClangdCompilationDatabase(prj: AbstractProject): boolean
         const extraArgs = lookupSourceParams(builderParams.sourceParams, source);
         const tokens = buildClangdCommandTokens(context, compileCommandFile, extraArgs);
 
-        entries.push({
-            directory: toPosix(rootDir),
-            file: compileCommandFile,
-            arguments: tokens,
-            command: joinCommandTokens(tokens)
-        });
+        entries.push(toCompilationDatabaseEntry(toPosix(rootDir), compileCommandFile, tokens));
     }
 
-    if (!entries.length) { return false; }
+    if (!entries.length) { return -1; }
 
-    return writeIfChanged(path.join(dbDir, MANAGED_DB_FILE), JSON.stringify(entries));
+    writeIfChanged(path.join(dbDir, MANAGED_DB_FILE), JSON.stringify(entries));
+    return entries.length;
+}
+
+/**
+ * 从 builder.params 生成 clangd 友好的编译数据库(当前激活 target,写入其子目录)。
+ * builder.params 由 CodeBuilder.getCommands 在每次 UpdateCppConfig/构建时同步写出。
+ */
+export function generateClangdCompilationDatabase(prj: AbstractProject): boolean {
+    return generateDbForTarget(prj, prj.getCurrentTarget()) >= 0;
+}
+
+/** 清理已不存在的 target 残留库目录(只删 `.eide-clangd/` 下与 target 同名的目录) */
+export function pruneOrphanTargetDbDirs(prj: AbstractProject, validTargetNames: string[]): boolean {
+    let removed = false;
+    try {
+        const baseDir = getManagedDbDir(prj);
+        if (!fs.existsSync(baseDir)) { return false; }
+        const valid = new Set((validTargetNames || []).map((n) => String(n).toLowerCase()));
+        for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+            if (!entry.isDirectory() || valid.has(entry.name.toLowerCase())) { continue; }
+            fs.rmSync(path.join(baseDir, entry.name), { recursive: true, force: true });
+            removed = true;
+        }
+    } catch (error) {
+        GlobalEvent.log_error(error);
+    }
+    return removed;
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +470,11 @@ function updateClangdUserConfig(prj: AbstractProject, toolchainName: string, act
     const configPath = path.join(configDir, 'config.yaml');
     const rootDir = prj.getProjectRoot().path;
     const token = createManagedConfigToken(rootDir);
-    const dbDir = toPosix(getManagedDbDir(prj));
+    // 指针跟随激活 target:CompilationDatabase 指向其预生成子目录;子目录尚不存在
+    // (该 target 从未构建/预生成过)时不动 config,避免僵尸块回收误删有效块
+    const targetDbDir = getTargetDbDir(rootDir, activeTargetKey);
+    if (!fs.existsSync(targetDbDir)) { return false; }
+    const dbDir = toPosix(targetDbDir);
     // PathMatch 覆盖:项目根 + 根外源码/包含目录(如 PROJ_A 项目的 ../Library、../EXTEND),
     // 否则根外源文件不会被 clangd 命中而回退到启发式解析
     const pathRoots = [rootDir, ...collectExternalSourceRoots(prj.GetConfiguration<any>().config, rootDir)];
@@ -568,6 +598,78 @@ export async function tryRestartClangd(): Promise<boolean> {
         }
     }
     return false;
+}
+
+export interface RebuildClangdCacheResult {
+    targetName: string;
+    entries: number;
+    cacheCleared: boolean;
+}
+
+/**
+ * 重建 clangd 缓存(维修通道):删当前 target 的预生成库 + `.eide-clangd/.cache`
+ * (clangd 后台索引)→ 走重生全链路 → 唤醒 clangd。日常增删文件走自动管线,
+ * 不需要它;库与索引脱钩/损坏/换代残留时用它一键恢复(幂等,可重跑)。
+ */
+export function rebuildClangdCache(prj: AbstractProject): RebuildClangdCacheResult {
+    const rootDir = prj.getProjectRoot().path;
+    const targetName = prj.getCurrentTarget();
+    const dbDir = getTargetDbDir(rootDir, targetName);
+
+    let cacheCleared = false;
+    try {
+        if (fs.existsSync(dbDir)) {
+            fs.rmSync(dbDir, { recursive: true, force: true });
+            cacheCleared = true;
+        }
+        const indexDir = path.join(getManagedDbDir(prj), '.cache');
+        if (fs.existsSync(indexDir)) {
+            fs.rmSync(indexDir, { recursive: true, force: true });
+            cacheCleared = true;
+        }
+    } catch (error) {
+        GlobalEvent.log_error(error);
+    }
+
+    const entries = generateDbForTarget(prj, targetName);
+    updateClangdUserConfig(prj, prj.getToolchain().name, targetName);
+    updateClangdWorkspaceSettings(prj);
+    void tryRestartClangd();
+
+    return { targetName, entries: Math.max(entries, 0), cacheCleared };
+}
+
+export interface PregenAllTargetsResult {
+    generated: { target: string; entries: number }[];
+    skipped: string[];
+}
+
+/**
+ * 批量预生成:为本项目所有 target 各生成一份库(`.eide-clangd/<target>/`),
+ * 缺 builder.params(从未构建/切换过)的 target 跳过并报告,最后把指针指回
+ * 激活 target 并唤醒一次 clangd。切换 target 时只翻指针,无需等待重生。
+ */
+export function pregenAllTargetsClangd(prj: AbstractProject): PregenAllTargetsResult {
+    const config = prj.GetConfiguration<any>().config;
+    const names: string[] = Object.keys(config?.targets || {});
+    if (!names.includes(prj.getCurrentTarget())) { names.push(prj.getCurrentTarget()); }
+
+    const result: PregenAllTargetsResult = { generated: [], skipped: [] };
+    for (const name of names) {
+        const count = generateDbForTarget(prj, name);
+        if (count >= 0) {
+            result.generated.push({ target: name, entries: count });
+        } else {
+            result.skipped.push(name);
+        }
+    }
+
+    pruneOrphanTargetDbDirs(prj, names);
+    updateClangdUserConfig(prj, prj.getToolchain().name, prj.getCurrentTarget());
+    updateClangdWorkspaceSettings(prj);
+    void tryRestartClangd();
+
+    return result;
 }
 
 /** clangd 支持总入口:由 AbstractProject.UpdateCppConfig 防抖触发 */

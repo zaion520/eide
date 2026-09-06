@@ -36,7 +36,7 @@
     "homepage": "https://em-ide.com",
     "license": "MIT",
     "description": "A mcu development environment for 8051/AVR/STM8/Cortex-M/MIPS/RISC-V",
-    "version": "3.27.3",
+    "version": "3.27.5",
     "preview": false,
     "engines": {
         "vscode": "^1.89.0"
@@ -74,6 +74,7 @@
         "watch": "tsc -watch -p ./",
         "test": "npm run compile && node ./node_modules/vscode/bin/test",
         "test:unit": "tsc -p test/tsconfig.json && node --test \"out/tmp/test/scripts/*.test.js\"",
+    "pack:install": "node scripts/package-and-install.js",
         "build:callgraph-view": "npm --prefix src/html/callgraph_view run build"
     },
     "devDependencies": {
@@ -1195,6 +1196,18 @@
                 "title": "%eide.project.relocateRoot%"
             },
             {
+                "command": "_cl.eide.project.clangd.rebuildCache",
+                "title": "%eide.project.clangd.rebuildCache%"
+            },
+            {
+                "command": "_cl.eide.project.clangd.pregenAllTargets",
+                "title": "%eide.project.clangd.pregenAllTargets%"
+            },
+            {
+                "command": "_cl.eide.project.buildAllTargets",
+                "title": "%eide.project.buildAllTargets%"
+            },
+            {
                 "command": "_cl.eide.project.exportAsTemplate",
                 "title": "%eide.project.export.template%",
                 "icon": {
@@ -1245,6 +1258,17 @@
             }
         ],
         "menus": {
+            "commandPalette": [
+                {
+                    "command": "_cl.eide.project.buildAllTargets"
+                },
+                {
+                    "command": "_cl.eide.project.clangd.rebuildCache"
+                },
+                {
+                    "command": "_cl.eide.project.clangd.pregenAllTargets"
+                }
+            ],
             "view/title": [
                 {
                     "command": "_cl.eide.workspace.build",
@@ -1432,6 +1456,21 @@
                     "command": "_cl.eide.project.relocateRoot",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
                     "group": "5_group@6"
+                },
+                {
+                    "command": "_cl.eide.project.clangd.rebuildCache",
+                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
+                    "group": "5_group@8"
+                },
+                {
+                    "command": "_cl.eide.project.clangd.pregenAllTargets",
+                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
+                    "group": "5_group@9"
+                },
+                {
+                    "command": "_cl.eide.project.buildAllTargets",
+                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
+                    "group": "5_group@10"
                 },
                 {
                     "command": "eide.open.makelibs.cfg",

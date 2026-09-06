@@ -42,13 +42,16 @@ import {
     CreateOptions, VirtualFolder, VirtualFile, ImportOptions,
     ProjectTargetInfo, ProjectConfigData, ProjectType, ProjectConfiguration, ProjectBaseApi
 } from './EIDETypeDefine';
-import { applyTargetToConfigData, makeTargetInfo } from './TargetManager';
+import { applyTargetToConfigData, makeTargetInfo, formatBuildAllSummary, BuildTargetResult } from './TargetManager';
 import {
     computeLevelDelta, findProjectRootsUnder, rewriteConfigRelativePaths, auditExternalReferences,
 } from './ProjectRootTool';
 import {
     isV42Skeleton, assembleFromSkeleton, splitIntoSkeleton, packTargetForDisk,
 } from './ProjectStorageV42';
+import {
+    rebuildClangdCache, pregenAllTargetsClangd,
+} from './clangdIntegration';
 import {
     PackInfo, ComponentFileItem, DeviceInfo,
     getComponentKeyDescription, ArmBaseCompileData, ArmBaseCompileConfigModel,
@@ -4061,6 +4064,119 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         } catch (error) {
             this.showTargetOperationError(error);
         }
+    }
+
+    /**
+     * 重建 clangd 缓存(维修通道):删当前 target 的预生成库 + 后台索引,
+     * 走重生全链路并唤醒 clangd。日常增删文件走自动管线,不需要它。
+     */
+    public async onRebuildClangdCache(prjItem?: ProjTreeItem) {
+
+        const prj = this.resolveTargetOperationProject(prjItem);
+        if (!prj) {
+            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            return;
+        }
+
+        try {
+            const result = rebuildClangdCache(prj);
+            GlobalEvent.emit('msg', newMessage('Info',
+                `Clangd cache rebuilt for target '${result.targetName}': ${result.entries} files${result.cacheCleared ? '' : ' (nothing cached)'} !`));
+        } catch (error) {
+            this.showTargetOperationError(error);
+        }
+    }
+
+    /**
+     * 批量预生成:为本项目所有 target 各生成一份库(`.eide-clangd/<target>/`),
+     * 缺构建参数的 target 跳过并报告;指针保持指向激活 target。
+     */
+    public async onPregenAllTargetsClangd(prjItem?: ProjTreeItem) {
+
+        const prj = this.resolveTargetOperationProject(prjItem);
+        if (!prj) {
+            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            return;
+        }
+
+        try {
+            const result = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Pregenerating clangd databases for all targets',
+                cancellable: false
+            }, async () => pregenAllTargetsClangd(prj));
+
+            const okPart = result.generated.map((g) => `${g.target} (${g.entries})`).join(', ');
+            const skipPart = result.skipped.length ? `; skipped (no builder.params): ${result.skipped.join(', ')}` : '';
+            GlobalEvent.emit('msg', newMessage(
+                result.skipped.length ? 'Warning' : 'Info',
+                `Clangd databases ready: ${okPart}${skipPart} !`));
+        } catch (error) {
+            this.showTargetOperationError(error);
+        }
+    }
+
+    /**
+     * 构建所有 target:按顺序逐个切换并构建,单个失败只记账不中断,
+     * 全部跑完后切回原 target 并汇总报告(✓/✗ 清单)。
+     */
+    public async onBuildAllTargets(prjItem?: ProjTreeItem) {
+
+        const prj = this.resolveTargetOperationProject(prjItem);
+        if (!prj) {
+            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            return;
+        }
+
+        let names: string[] = [];
+        try {
+            names = prj.getTargetManager().getNames();
+        } catch (error) {
+            this.showTargetOperationError(error);
+            return;
+        }
+        if (!names.length) {
+            GlobalEvent.emit('msg', newMessage('Info', `No targets to build !`));
+            return;
+        }
+
+        const originalTarget = prj.getCurrentTarget();
+        const results: BuildTargetResult[] = [];
+
+        try {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Building all targets (${names.length})`,
+                cancellable: false
+            }, async (progress) => {
+                for (const name of names) {
+                    progress.report({ message: `Building '${name}' ...` });
+                    try {
+                        await prj.switchTarget(name);
+                        const res = await this.buildProject(prj, { notRebuild: true });
+                        results.push({ target: name, success: res.success, message: res.success ? undefined : res.message });
+                    } catch (error) {
+                        results.push({
+                            target: name,
+                            success: false,
+                            message: error instanceof Error ? error.message : String(error)
+                        });
+                    }
+                }
+            });
+        } finally {
+            try {
+                if (prj.getCurrentTarget() !== originalTarget) {
+                    await prj.switchTarget(originalTarget);
+                }
+            } catch (error) {
+                GlobalEvent.log_error(error);
+            }
+        }
+
+        const summary = formatBuildAllSummary(results);
+        GlobalEvent.log_info(`--- Build all targets: ${prj.getProjectName()} ---\n${summary.text}`);
+        GlobalEvent.emit('msg', newMessage(summary.hasFailure ? 'Warning' : 'Info', summary.text));
     }
 
     switchTarget(prjItem?: ProjTreeItem) {

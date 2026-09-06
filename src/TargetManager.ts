@@ -449,3 +449,40 @@ export class TargetManager {
         applyTargetSnapshot(prjConfigData, targetInfo, this.host.restoreContext());
     }
 }
+
+/** 单个 target 的构建结果(构建所有 target 时逐个收集,失败不中断) */
+export interface BuildTargetResult {
+    target: string;
+    success: boolean;
+    /** 失败时的错误文本(可能多行,汇总时只取首行) */
+    message?: string;
+}
+
+export interface BuildAllSummary {
+    text: string;
+    hasFailure: boolean;
+}
+
+/** 构建所有 target 的汇总文本:✓/✗ 清单,失败项只保留首行错误(纯函数) */
+export function formatBuildAllSummary(results: BuildTargetResult[]): BuildAllSummary {
+    const passed = results.filter((r) => r.success).length;
+    const failed = results.length - passed;
+    if (!results.length) {
+        return { text: 'No targets to build.', hasFailure: false };
+    }
+
+    const lines = results.map((r) => {
+        if (r.success) { return `✓ ${r.target}`; }
+        const firstLine = String(r.message || 'failed')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => line.length > 0) || 'failed';
+        const trimmed = firstLine.length > 160 ? `${firstLine.slice(0, 160)}...` : firstLine;
+        return `✗ ${r.target}: ${trimmed}`;
+    });
+
+    return {
+        text: `Build all targets finished: ${passed} passed, ${failed} failed.\n${lines.join('\n')}`,
+        hasFailure: failed > 0
+    };
+}

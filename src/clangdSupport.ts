@@ -443,6 +443,61 @@ export interface ClangdTargetContext {
     forceIncludeHeaders?: string[];
 }
 
+/**
+ * 显式 target 的上下文输入(纯数据,不依赖激活态):
+ * 调用方从 `build/<target>/builder.params`(源文件/包含/宏/选项)与该 target 存档的
+ * `toolchainConfigMap[toolchain]`(cpu/fpu/语言等)组装,替代原来只读激活态的写法。
+ */
+export interface ClangdTargetInputs {
+    toolchain: string;
+    projectType?: string;
+    compilerPath?: string;
+    cpuType?: string;
+    floatingPointHardware?: string;
+    armThumbMode?: string;
+    useMicroLib?: boolean;
+    executeOnlyCode?: boolean;
+    oneElfSectionPerFunction?: boolean;
+    shortEnumsWchar?: boolean;
+    outputDebugInfo?: boolean;
+    optimization?: string;
+    languageC?: string;
+    languageCpp?: string;
+    /** builder.params 的 incDirs(原始相对写法,保持原样透传) */
+    incList: string[];
+    /** builder.params 的 defines(不含 fallback,内部自动前置 CPU/FPU 宏) */
+    defineList: string[];
+    systemIncludeList?: string[];
+    forceIncludeHeaders?: string[];
+}
+
+/** 从显式 target 输入组装 clangd 上下文(含 CPU/FPU fallback 宏前置) */
+export function buildClangdContextForTarget(inputs: ClangdTargetInputs): ClangdTargetContext {
+    return {
+        toolchain: inputs.toolchain,
+        projectType: inputs.projectType,
+        compilerPath: inputs.compilerPath,
+        cpuType: inputs.cpuType,
+        floatingPointHardware: inputs.floatingPointHardware,
+        armThumbMode: inputs.armThumbMode,
+        useMicroLib: inputs.useMicroLib,
+        executeOnlyCode: inputs.executeOnlyCode,
+        oneElfSectionPerFunction: inputs.oneElfSectionPerFunction,
+        shortEnumsWchar: inputs.shortEnumsWchar,
+        outputDebugInfo: inputs.outputDebugInfo,
+        optimization: inputs.optimization,
+        languageC: inputs.languageC,
+        languageCpp: inputs.languageCpp,
+        incList: Array.isArray(inputs.incList) ? inputs.incList : [],
+        defineList: [
+            ...getFallbackDefinesForTarget({ cpuType: inputs.cpuType, floatingPointHardware: inputs.floatingPointHardware }),
+            ...(Array.isArray(inputs.defineList) ? inputs.defineList : [])
+        ],
+        systemIncludeList: inputs.systemIncludeList,
+        forceIncludeHeaders: inputs.forceIncludeHeaders
+    };
+}
+
 export function isSupportedSourceFile(filePath: string): boolean {
     return ['.c', '.cc', '.cpp', '.cxx'].includes(path.extname(String(filePath)).toLowerCase());
 }
@@ -471,6 +526,22 @@ export function asCompileCommandFile(rootDir: string, absoluteFile: string): str
 
     const normalizedRelative = toPosix(relative);
     return normalizedRelative.startsWith('.') ? normalizedRelative : `./${normalizedRelative}`;
+}
+
+/**
+ * 组装 compile_commands.json 条目。JSON Compilation Database 规范里 `arguments`
+ * 与 `command` 二选一即可,clangd 原生支持 `arguments` 形态,因此不再重复存一份
+ * `command` 字符串(库体积减半,几乎全是重复文本)。
+ */
+export function toCompilationDatabaseEntry(
+    directory: string, file: string, tokens: string[]
+): { directory: string; file: string; arguments: string[] } {
+    return { directory, file, arguments: [...tokens] };
+}
+
+/** 单 target 的库目录:`.eide-clangd/<target>/`(多 target 预生成,切换只翻指针) */
+export function getTargetDbDir(rootDir: string, targetName: string): string {
+    return path.join(rootDir, '.eide-clangd', targetName);
 }
 
 export function isInvalidIncludePathToken(includePath?: string): boolean {

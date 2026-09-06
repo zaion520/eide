@@ -188,6 +188,9 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.rename', (item) => projectExplorer.onRenameTarget(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.duplicate', (item) => projectExplorer.onDuplicateTarget(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.delete', (item) => projectExplorer.onDeleteTarget(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.clangd.rebuildCache', (item) => projectExplorer.onRebuildClangdCache(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.clangd.pregenAllTargets', (item) => projectExplorer.onPregenAllTargetsClangd(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.buildAllTargets', (item) => projectExplorer.onBuildAllTargets(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.relocateRoot', (item) => projectExplorer.onRelocateProjectRoot(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportAsTemplate', (item) => projectExplorer.ExportProjectTemplate(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportXml', (item) => projectExplorer.ExportKeilXml(item)));
