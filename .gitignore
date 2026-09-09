@@ -50,3 +50,6 @@ dotnet-runtime*.exe
 # local tool state (AI workspace / private editor data)
 /.workbuddy/
 /.zcode/
+
+# go build artifacts in source dir
+unify_builder-go/*.exe
