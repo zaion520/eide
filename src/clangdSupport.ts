@@ -57,7 +57,7 @@ export function isRiscvContext(toolchain?: string, projectType?: string): boolea
 
 /**
  * 兼容 shim 种类决策(纯函数,参考 Eide Extend 的分工具链模型):
- *  - AC5 / C51:需要关键字 shim(本扩展按需生成到 `.eide-clangd/`,见 clangdIntegration);
+ *  - AC5 / C51:需要关键字 shim(本扩展按需生成到 `.eide/clangd/`,见 clangdIntegration);
  *  - AC6 / GCC / LLVM / 其他:一律不需要 force-include。clangd 经 query-driver
  *    直接使用真实工具链前端,真实头文件(CMSIS/arm_compat.h 等)可被原生解析;
  *    此时再 force-include 化石 lint 头反而是波浪线的来源
@@ -539,9 +539,21 @@ export function toCompilationDatabaseEntry(
     return { directory, file, arguments: [...tokens] };
 }
 
-/** 单 target 的库目录:`.eide-clangd/<target>/`(多 target 预生成,切换只翻指针) */
-export function getTargetDbDir(rootDir: string, targetName: string): string {
-    return path.join(rootDir, '.eide-clangd', targetName);
+/**
+ * 项目级 clangd 生成物收拢目录:`<root>/.clangd/`。
+ * - 编译数据库:`<root>/.clangd/compile_commands.json`(单文件,随激活 target 重生成)
+ * - 后台索引缓存:clangd 的 background index 存储跟随 CDB 所在目录,开启后自动落
+ *   `<root>/.clangd/.cache/clangd/index`,项目根不再出现散落的 `.cache`
+ * 注意:`.clangd` 这个名字被目录占用后,项目级 `.clangd` 配置文件不可再用
+ * (本管线用用户级 config.yaml 受管块,不受影响;旧版遗留的 `.clangd` 文件
+ * 由 migrateLegacyClangdConfig 在管线前段改名/移除,先于目录创建)。
+ */
+export function getProjectDbDir(rootDir: string): string {
+    return path.join(rootDir, '.clangd');
+}
+
+export function getProjectDbPath(rootDir: string): string {
+    return path.join(getProjectDbDir(rootDir), 'compile_commands.json');
 }
 
 export function isInvalidIncludePathToken(includePath?: string): boolean {
@@ -798,7 +810,18 @@ export function extractManagedBlockInfo(content: string): ManagedBlockInfo[] {
 // ---------------------------------------------------------------------------
 
 export function upsertClangdWorkspaceArgs(args: string[], opts: { disableClangTidy: boolean }): string[] {
-    const next = (args || []).filter((item) => !String(item).startsWith('--compile-commands-dir='));
+    const next = (args || []).filter((item) => {
+        const text = String(item);
+        // 剥除 --compile-commands-dir:CDB 位置由 config.yaml 受管块的 CompilationDatabase
+        // 指针(按项目 PathMatch 隔离)唯一表达,避免两处事实源打架。
+        // --background-index=false / =0 剥除:旧版(≤3.27.28)管线曾在工作区注入显式关闭,
+        // 3.27.29 起后台索引恢复默认开启(索引随 CDB 目录落 .clangd/.cache),残留的 false
+        // 会永久锁死"未打开文件跳转定义";统一移除让 clangd 走默认。裸参 / true / priority
+        // 等显式开启形态原样保留,不注入任何形态。
+        if (text.startsWith('--compile-commands-dir=')) { return false; }
+        if (text === '--background-index=false' || text === '--background-index=0') { return false; }
+        return true;
+    });
 
     const upsert = (value: string) => {
         if (!next.includes(value)) { next.push(value); }
@@ -813,7 +836,6 @@ export function upsertClangdWorkspaceArgs(args: string[], opts: { disableClangTi
     } else {
         removeExact('--clang-tidy=false');
     }
-    upsert('--background-index');
     upsert('--header-insertion=never');
 
     return next;

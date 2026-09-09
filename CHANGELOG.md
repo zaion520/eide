@@ -6,6 +6,29 @@ All notable version changes will be recorded in this file.
 
 ***
 
+### [unreleased] revision
+
+**New**:
+  - `clangd`: 生成物收拢进 `<root>/.clangd/`——编译数据库移至 `.clangd/compile_commands.json`(config.yaml 受管块指针同步指向该目录,按项目 PathMatch 隔离,不影响其他项目块);解除 `--background-index=false` 强制注入,后台索引恢复默认开启(全库符号索引,"转到定义"不再要求目标 .c 已打开;索引存储跟随 CDB 目录自动落 `.clangd/.cache/`,项目根不再散落 `.cache`);工作区 files.exclude 自动收纳 `.clangd`;升级首跑幂等清理旧布局残留(根目录库/根 `.cache`/`.eide-clangd/`);注意 `.clangd` 目录名占用后项目级 `.clangd` 配置文件不可再用(本管线使用用户级 config.yaml,无实害)
+  - `clangd`: 修复"未打开文件仍跳不到定义"——config.yaml 里历史工具/官方版写的 `EIDE Clangd Sync` 异前缀孤儿块(指针指向已删除的 .eide-clangd)与管线正确块同时命中,clangd 的 CompilationDatabase 打架导致库加载失败;管线现自动清理指向已不存在库的同项目孤儿块(在用的有效块保留);files.exclude 排除键改为仅 `compile_commands.json`(原整目录排除会连带隐藏后台索引 .cache)
+  - `clangd`: 参数管理器主动剥除残留的 `--background-index=false`(=0 同)——旧版(≤3.27.28)注入工作区的显式关闭会把后台索引永久锁死("未打开文件跳不到定义"、.cache 不生成),3.27.29 起的"不干预"策略反而无法清除历史残留;现统一移除让 clangd 走默认开启(裸参/true/priority 等显式开启形态仍保留)。实测三形态对照:无参/裸参 → `.clangd/.cache/clangd/index` 全量索引生成(93 文件);false → 无全库索引无 .cache
+  - `i18n`: 代码内用户可见文案接入 VSCode 官方 l10n 机制(`vscode.l10n.t()` + `l10n/bundle.l10n.zh-CN.json`,package.json 声明 `l10n` 字段)——目标删除/批量删除多选流程、Clangd 缓存重建提示的 QuickPick/模态确认框/消息全部跟随 UI 语言(运行时取词,与安装方式无关);新增 l10n 一致性守卫测试(扫描 src 的 l10n.t 调用,漏翻译即测试失败);清单 `%key%` 继续走 package.nls.json(清单本地化机制不变)
+  - `UI`: "删除目标"升级为多选批量(命令 ID `_cl.eide.target.delete` 与菜单位置不变):QuickPick 勾选多个 target(激活目标标注 `active` 且拒绝删除),模态确认后逐个删除(含旁路文件清理),单项失败不影响其余,结束汇总成功/失败
+  - `clangd`: 编译数据库改为根目录单文件 `<root>/compile_commands.json`,切换 target 时自动重生成并唤醒 clangd;移除 `.eide-clangd/` 按目标子目录布局与 `pregenAllTargets` 命令(升级后首次打开项目自动清理旧目录);工具链关键字 shim 迁移到 `.eide/clangd/`;config.yaml 的 `CompilationDatabase` 指针恒定指向项目根
+  - `clangd`: 显式关闭后台索引(注入 `--background-index=false`)——新版 clangd 该项默认开启,仅剥除参数不会生效;不再产生 `.cache` 索引目录,工作区设置中残留的 `--background-index` 开启形态会被自动替换
+  - `clangd`: `clangd.arguments` 维护改为**双写**(workspace 级 + folder 级各写各的)——`.code-workspace` 场景下 folder 级对资源优先级更高且数组整体覆盖,只写 workspace 级会让修复失效(实测踩坑)
+
+**Changes**:
+  - `Builder`: 编译数据库生成(`--only-dump-compilerdb`,每次 UpdateCppConfig/切 target 触发)切换至 Go 版 unify_builder(单文件原生程序,零 .NET 运行时依赖;与 C# 原版在真实项目 AC6/GCC 上逐字节对拍验收);完整构建管线迁移进行中,C# 版仍负责实际编译
+  - `UI`: 项目右键菜单重排——构建/烧录/目标/生成/查看五组分列(构建所有目标归构建组、启动调试移入烧录组、生成类命令聚拢为 6_group:builder.params → 调试配置模板 → compile_commands → lib 生成器 → 重定位根目录,查看类归 7_group);"导出为..."子菜单补 viewItem 限制(此前任意节点都会出现);芯片包节点 CMSIS 三项分组排序并汉化;"包含所有源文件"与"排除所有源文件"拆分排序;"设置编译器"补分组
+  - `UI`: 右键菜单"重建 Clangd 缓存"更名为"生成 compile_commands"(命令 ID `_cl.eide.project.clangd.rebuildCache` 不变)
+  - `Cppcheck`: 移除静态检测功能(命令、右键"静态检查"子菜单、`EIDE.Cppcheck.ExecutablePath` 设置与工具安装项一并删除)
+  - `Debug`: pyOCD 调试配置(运行时与右键"生成调试配置模板"两条路径)统一新增 `overrideGDBServerStartedRegex: "port"` 与 `executable`(后缀跟随工具链:Keil 为 .axf;AC5/AC6 模板不再丢弃 executable);probe-rs 的 `programBinary` 默认文件改为跟随工具链产物(Keil 为 .axf,不再硬编码 .elf)
+  - `Project Loading`: 屏蔽项目文件版本检测——eide.yml 版本比扩展新时不再拒绝加载,仅记录警告(eide-log)后继续
+  - `eide-binaries`: 屏蔽启动后的联网更新检测(不再每 6 小时查询新版本、不再弹更新失败提示);本地安装/修复路径(首次安装、binaries 损坏重装、`eide.reinstall.binaries` 命令)行为不变
+
+***
+
 ### [v3.27.3] revision
 
 **New**:

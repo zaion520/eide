@@ -92,6 +92,11 @@ export const view_str$flasher$eraseChipCommandLine = [
     'Erase Chip Command'
 ][langIndex];
 
+export const view_str$flasher$unlockChipCommand = [
+    '解锁芯片命令(擦除芯片前执行,可选)',
+    'Unlock Chip Command (executed before erase, optional)'
+][langIndex];
+
 export const view_str$flasher$targetName = [
     '目标芯片名称',
     'Target Name'

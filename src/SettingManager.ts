@@ -301,10 +301,6 @@ export class SettingManager {
 
     //--------------------- Global Option ------------------------
 
-    isEnableClangdConfigGenerator(): boolean {
-        return this.getConfiguration().get<boolean>('Option.EnableClangdConfigGenerator') || false;
-    }
-
     isSilentBuildOrFlash(): boolean {
         return this.getConfiguration().get<boolean>('Option.SilentWhenBuildOrFlash') || false;
     }
@@ -440,11 +436,6 @@ export class SettingManager {
 
     isInsertCommandsAtBegin(): boolean {
         return this.getConfiguration().get<boolean>('Option.InsertExtraCommandsAtBegin') || false;
-    }
-
-    getCppcheckerExe(): string | undefined {
-        return this.getFullPathByPluginConfig('Cppcheck.ExecutablePath')
-            || this.findExePathInSystemEnv('cppcheck');
     }
 
     //----------------------------- Flasher --------------------------------

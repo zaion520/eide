@@ -28,8 +28,7 @@
     "eide.target.rename": "Rename Target",
     "eide.target.duplicate": "Duplicate Target",
     "eide.target.delete": "Delete Target",
-    "eide.project.clangd.rebuildCache": "Rebuild Clangd Cache",
-    "eide.project.clangd.pregenAllTargets": "Pregenerate Clangd Databases For All Targets",
+    "eide.project.clangd.rebuildCache": "Generate compile_commands",
     "eide.project.buildAllTargets": "Build All Targets",
     "eide.project.build": "Build",
     "eide.project.buildAndFlash": "Build And Flash",
@@ -42,10 +41,6 @@
     "eide.project.generate_builder_params": "Generate builder.params",
     "eide.project.debug.start": "Start Debugging",
     "eide.project.debug.start.attach": "Start Debugging (attach)",
-
-    "eide.prj.menus.main.static-check": "Static Check",
-    "eide.prj.menus.sub.static-check.cppcheck": "Run Cppcheck",
-    "eide.prj.menus.sub.static-check.clear": "Clear Diagnostic Informations",
 
     "eide.prj.menus.main.export": "Export As ...",
     "eide.project.export.template": "Eide Project Template",
@@ -90,6 +85,9 @@
 
     "eide.package.install": "Install CMSIS Chip Package",
     "eide.package.install.cmsis": "Install CMSIS Header Files",
+    "eide.package.install.cmsis.headers": "Install CMSIS Core Headers",
+    "eide.package.install.cmsis.libs": "Install CMSIS Core Libs",
+    "eide.package.install.cmsis.driver_interface": "Install CMSIS Common Driver Interface",
     "eide.package.remove": "Uninstall Chip Support Package",
     "eide.package.select.device": "Select Device",
     "eide.package.comp.install": "Install Component",
@@ -173,8 +171,6 @@
     "settings.openocd.install.folder": "OpenOCD.exe path [`example: D:\\OpenOCD\\bin\\openocd.exe`]",
     "settings.stlink.install.folder": "`STM32_Programmer_CLI.exe` or `ST-LINK Utility: ST-LINK_CLI.exe` path",
     "settings.stvp.path": "STVP: `STVP_CmdLine.exe` path",
-
-    "settings.cppcheck.exec.path": "cppcheck.exe executable path",
 
     "settings.option.disable.editor_context.menu": "Disable editor context menu",
     "settings.option.disable.explorer_context.menu": "Disable explorer context menu",

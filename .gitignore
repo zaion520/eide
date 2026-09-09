@@ -41,3 +41,12 @@ dotnet-runtime*.exe
 /src/html/**/node_modules
 /src/html/callgraph_view/dist
 /src/html/callgraph_view/fixtures
+
+# clangd integration (root-level compilation database + index cache)
+/compile_commands.json
+/.cache/
+/.eide-clangd/
+
+# local tool state (AI workspace / private editor data)
+/.workbuddy/
+/.zcode/

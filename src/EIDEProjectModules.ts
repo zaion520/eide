@@ -32,6 +32,7 @@ import {
     view_str$flasher$resetMode,
     view_str$flasher$other_cmds,
     view_str$flasher$stcgalOptions,
+    view_str$flasher$unlockChipCommand,
     view_str$compile$archExtensions,
     view_str$flasher$eraseAll
 } from "./StringTable";
@@ -2597,6 +2598,8 @@ class PyOCDUploadModel extends UploadConfigModel<PyOCDFlashOptions> {
                 return view_str$flasher$options;
             case 'otherCmds':
                 return view_str$flasher$other_cmds;
+            case 'unlockCommand':
+                return view_str$flasher$unlockChipCommand;
             default:
                 return super.GetKeyDescription(key);
         }
@@ -2631,6 +2634,7 @@ class PyOCDUploadModel extends UploadConfigModel<PyOCDFlashOptions> {
             case 'config':
                 return 'ConfigurationEditor_16x.svg';
             case 'otherCmds':
+            case 'unlockCommand':
                 return 'ImmediateWindow_16x.svg';
             default:
                 return super.getKeyIcon(key);
@@ -2648,6 +2652,7 @@ class PyOCDUploadModel extends UploadConfigModel<PyOCDFlashOptions> {
             case 'config':
                 return 'EVENT';
             case 'otherCmds':
+            case 'unlockCommand':
                 return 'INPUT';
             default:
                 return super.GetKeyType(key);
@@ -2729,7 +2734,8 @@ class PyOCDUploadModel extends UploadConfigModel<PyOCDFlashOptions> {
             baseAddr: '0x08000000',
             speed: '4M',
             config: `${AbstractProject.EIDE_DIR}/pyocd.yaml`,
-            otherCmds: ''
+            otherCmds: '',
+            unlockCommand: ''
         };
     }
 }

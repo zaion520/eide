@@ -47,7 +47,7 @@ import { ExeCmd } from '../lib/node-utility/Executable';
 
 let _instance: ResInstaller | undefined;
 
-export type ExternalToolName = ToolchainName | HexUploaderType | 'cppcheck' | string;
+export type ExternalToolName = ToolchainName | HexUploaderType | string;
 
 export interface ExternalToolInfo {
 
@@ -186,14 +186,6 @@ export class ResInstaller {
             readable_name: 'OpenOCD Programmer (v0.12.0-rc2)',
             setting_name: 'OpenOCD.ExePath',
             resource_repath_in_pack: `bin/openocd${platform.exeSuffix()}`,
-            no_binaries: no_binaries
-        });
-
-        this.registerTool('cppcheck', {
-            resource_name: 'cppcheck',
-            readable_name: 'Cppcheck (Code Inspection)',
-            setting_name: 'Cppcheck.ExecutablePath',
-            resource_repath_in_pack: `cppcheck${platform.exeSuffix()}`,
             no_binaries: no_binaries
         });
 

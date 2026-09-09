@@ -3186,14 +3186,16 @@ $(OUT_DIR):
     protected async BeforeLoad(wsFile: File): Promise<void> {
 
         // check project version
+        // 版本检测已屏蔽:项目版本比本扩展新时不再中止加载,仅记录警告后继续
+        // (数据不兼容时 parse 阶段自有字段级错误,不再用版本号做单向门)
         const eideFile = File.fromArray([wsFile.dir, AbstractProject.EIDE_DIR, AbstractProject.prjConfigName]);
         const conf = ProjectConfiguration.parseProjectFile(eideFile.Read());
         if (conf.version) {
             const prj_version = conf.version;
             const eide_conf_v = EIDE_CONF_VERSION;
             const prjv_vs_eidev = compareVersion(prj_version, eide_conf_v);
-            if (prjv_vs_eidev > 0) { // prj version > eide, error
-                throw Error(`The project config version is '${conf.version}', but eide is '${EIDE_CONF_VERSION}'. Please update 'eide' to the latest version !`);
+            if (prjv_vs_eidev > 0) { // prj version > eide, warn but continue loading
+                GlobalEvent.log_warn(`The project config version is '${conf.version}', but eide is '${EIDE_CONF_VERSION}'. Trying to load anyway (version check disabled).`);
             }
         }
 
@@ -4472,9 +4474,9 @@ class EIDEProject extends AbstractProject {
     }
 
     /**
-     * 更新 clangd 集成(.eide-clangd/compile_commands.json + 用户级 config.yaml +
+     * 更新 clangd 集成(`<root>/compile_commands.json` 根目录单库 + 用户级 config.yaml +
      * 工作区 clangd.arguments)。doUpdateCompilerDatabase 内部会先同步刷新
-     * builder.params,因此此处总能读到新鲜的构建参数。
+     * builder.params,因此此处总能读到新鲜的构建参数;切换 target 后由此自动重生成库并唤醒 clangd。
      */
     protected doUpdateClangdSupport() {
         updateClangdIntegration(this);

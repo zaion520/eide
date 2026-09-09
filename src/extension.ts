@@ -195,7 +195,6 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.duplicate', (item) => projectExplorer.onDuplicateTarget(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.target.delete', (item) => projectExplorer.onDeleteTarget(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.clangd.rebuildCache', (item) => projectExplorer.onRebuildClangdCache(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.clangd.pregenAllTargets', (item) => projectExplorer.onPregenAllTargetsClangd(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.buildAllTargets', (item) => projectExplorer.onBuildAllTargets(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.relocateRoot', (item) => projectExplorer.onRelocateProjectRoot(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportAsTemplate', (item) => projectExplorer.ExportProjectTemplate(item)));
@@ -286,9 +285,6 @@ export async function activate(context: vscode.ExtensionContext) {
     // other project tools
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.show_disassembly', (url) => projectExplorer.showDisassembly(url)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.show_cmsis_config_wizard', (url) => projectExplorer.showCmsisConfigWizard(url)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.static-check.cppcheck', (item) => projectExplorer.cppcheckProject(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.static-check.clear', (item) => projectExplorer.clearCppcheckDiagnostic()));
-    //subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.cppcheck.check_file', (url) => projectExplorer.cppcheckFile(url)));
 
     operationExplorer.on('request_open_project', (fsPath) => projectExplorer.emit('request_open_project', fsPath));
     operationExplorer.on('request_create_project', (option) => projectExplorer.emit('request_create_project', option));
@@ -611,29 +607,13 @@ async function checkAndInstallBinaries(forceInstall?: boolean): Promise<boolean>
             }
         }
 
-        // try fetch update after 5sec delay
-        if (localVersion) {
-            setTimeout(async (curLocalVersion: string) => {
-                const appUsrData = resManager.getAppUsrData() || {};
-                const lastCheckUpdateTime: number = appUsrData['LastCheckBinariesUpdateTime'] || 0;
-                if (Date.now() > lastCheckUpdateTime + (6 * utility.TIME_ONE_HOUR)) {
-                    const done = await tryUpdateBinaries(binFolder, curLocalVersion); // no prompt
-                    if (done) {
-                        resManager.setAppUsrData('LastCheckBinariesUpdateTime', Date.now());
-                    } else {
-                        const msg = `Update eide-binaries failed, please restart vscode to try again !`;
-                        const sel = await vscode.window.showErrorMessage(msg, 'Restart', 'Cancel');
-                        if (sel == 'Restart') {
-                            vscode.commands.executeCommand('workbench.action.reloadWindow');
-                        }
-                    }
-                }
-            }, 5 * 1000, localVersion);
-        }
+        // 在线更新检测已屏蔽:启动后不再联网查询 eide-binaries 新版本,
+        // 也不再弹 "Update eide-binaries failed" 提示。
+        // 本地安装/修复路径(forceInstall / binaries 缺失 / 版本损坏)保持不变。
 
-        // binaries folder is existed, but can not get local binaries version, 
+        // binaries folder is existed, but can not get local binaries version,
         // the binaries maybe damaged, we need to force reinstall it
-        else {
+        if (!localVersion) {
             platform.DeleteDir(binFolder); // del existed folder
             return await tryUpdateBinaries(binFolder, undefined);
         }
@@ -2319,6 +2299,11 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
             dbgCfg['name'] = 'Cortex-Debug: pyOCD';
             dbgCfg['servertype'] = 'pyocd';
             dbgCfg['targetId'] = flasherCfg.targetName;
+            // pyocd gdbserver 启动输出与 cortex-debug 内置检测文本不一致时,
+            // 用宽松关键字 "port" 兜底判定服务器已启动
+            dbgCfg['overrideGDBServerStartedRegex'] = 'port';
+            // 显式给出可执行文件(后缀跟随工具链:Keil 为 .axf,GCC 为 .elf)
+            dbgCfg['executable'] = toFmtRelativePath(prj.getExecutablePath());
             const cliArgs: string[] = [];
             if (flasherCfg.config) {
                 const confFile = new File(prj.ToAbsolutePath(flasherCfg.config));
@@ -2450,8 +2435,8 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
                     {
                         "coreIndex": 0,
                         "svdFile": getSvdFile(prj),
-                        "programBinary": toFmtRelativePath(
-                            prj.getExecutablePathWithoutSuffix() + '.elf')
+                        // 默认用工具链产物(Keil 为 .axf,GCC 为 .elf),不再硬编码 .elf
+                        "programBinary": toFmtRelativePath(prj.getExecutablePath())
                     }
                 ]
             };

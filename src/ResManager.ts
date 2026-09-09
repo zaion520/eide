@@ -452,6 +452,14 @@ export class ResManager extends events.EventEmitter {
         return File.fromArray([this.getBuiltInToolsDir().path, dirname, `unify_builder${exeSuffix()}`]);
     }
 
+    /** Go 版构建器(编译数据库模式已与 C# 原版逐字节对拍验收);单文件原生程序,无 dotnet 依赖 */
+    getGoUnifyBuilderExe(): File {
+        let dirname = 'unify_builder-go';
+        if (osType() == 'darwin')
+            dirname += File.sep + getArchId();
+        return File.fromArray([this.getBuiltInToolsDir().path, dirname, `unify_builder${exeSuffix()}`]);
+    }
+
     getSerialPortExe(): File {
         return File.fromArray([this.getUnifyBuilderExe().dir, `serial_monitor${exeSuffix()}`]);
     }

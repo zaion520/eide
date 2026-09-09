@@ -28,8 +28,7 @@
     "eide.target.rename": "重命名目标",
     "eide.target.duplicate": "克隆目标",
     "eide.target.delete": "删除目标",
-    "eide.project.clangd.rebuildCache": "重建 Clangd 缓存",
-    "eide.project.clangd.pregenAllTargets": "预生成全部目标的 Clangd 库",
+    "eide.project.clangd.rebuildCache": "生成 compile_commands",
     "eide.project.buildAllTargets": "构建所有目标",
     "eide.project.build": "构建",
     "eide.project.buildAndFlash": "构建，烧录",
@@ -42,10 +41,6 @@
     "eide.project.generate_builder_params": "生成 builder.params",
     "eide.project.debug.start": "启动调试",
     "eide.project.debug.start.attach": "启动调试 (附加)",
-
-    "eide.prj.menus.main.static-check": "静态检查",
-    "eide.prj.menus.sub.static-check.cppcheck": "执行 Cppcheck",
-    "eide.prj.menus.sub.static-check.clear": "清除诊断结果",
 
     "eide.prj.menus.main.export": "导出为 ...",
     "eide.project.export.template": "EIDE 模板",
@@ -90,6 +85,9 @@
 
     "eide.package.install": "安装 CMSIS 芯片支持包",
     "eide.package.install.cmsis": "安装 CMSIS 头文件",
+    "eide.package.install.cmsis.headers": "安装 CMSIS 头文件",
+    "eide.package.install.cmsis.libs": "安装 CMSIS 核心库",
+    "eide.package.install.cmsis.driver_interface": "安装 CMSIS 通用驱动接口",
     "eide.package.remove": "卸载芯片支持包",
     "eide.package.select.device": "选择芯片",
     "eide.package.comp.install": "安装组件",
@@ -170,8 +168,6 @@
     "settings.openocd.install.folder": "OpenOCD.exe 可执行文件路径 [`example: D:\\OpenOCD\\bin\\openocd.exe`]",
     "settings.stlink.install.folder": "`STM32_Programmer_CLI.exe` 或 `ST-LINK Utility: ST-LINK_CLI.exe` 可执行文件路径",
     "settings.stvp.path": "STVP: `STVP_CmdLine.exe` 可执行文件路径",
-    
-    "settings.cppcheck.exec.path": "cppcheck.exe 可执行文件路径",
     
     "settings.option.disable.editor_context.menu": "禁用编辑器上下文菜单",
     "settings.option.disable.explorer_context.menu": "禁用资源浏览器上下文菜单",

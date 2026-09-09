@@ -362,8 +362,19 @@ export abstract class CodeBuilder {
         outDir.CreateDir(true);
 
         // generate command line
+        const cmds = this.getCommands();
+
+        // 编译数据库模式优先使用 Go 版构建器(已与 C# 原版逐字节对拍验收,
+        // 单文件原生程序,无 .NET 运行时依赖);缺失时回退 C# 版
+        if (cmds.includes('--only-dump-compilerdb')) {
+            const goExe = ResManager.instance().getGoUnifyBuilderExe();
+            if (goExe.IsFile()) {
+                return CmdLineHandler.getCommandLine(goExe.path, cmds);
+            }
+        }
+
         const commandLine = generateDotnetProgramCmd(
-            ResManager.instance().getUnifyBuilderExe(), this.getCommands());
+            ResManager.instance().getUnifyBuilderExe(), cmds);
 
         return commandLine;
     }

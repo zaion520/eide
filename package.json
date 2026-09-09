@@ -2,6 +2,7 @@
     "name": "eide",
     "displayName": "Embedded IDE",
     "publisher": "cl",
+    "l10n": "./l10n",
     "author": {
         "name": "cl",
         "url": "https://github.com/github0null",
@@ -36,7 +37,7 @@
     "homepage": "https://em-ide.com",
     "license": "MIT",
     "description": "A mcu development environment for 8051/AVR/STM8/Cortex-M/MIPS/RISC-V",
-    "version": "3.27.8",
+    "version": "3.27.32",
     "preview": false,
     "engines": {
         "vscode": "^1.89.0"
@@ -81,8 +82,7 @@
         "onCommand:eide.operation.new_project",
         "onCommand:eide.operation.open_project",
         "onCommand:_cl.eide.project.buildAllTargets",
-        "onCommand:_cl.eide.project.clangd.rebuildCache",
-        "onCommand:_cl.eide.project.clangd.pregenAllTargets"
+        "onCommand:_cl.eide.project.clangd.rebuildCache"
     ],
     "icon": "res/icon/icon.png",
     "main": "./dist/extension.js",
@@ -304,12 +304,6 @@
                         "markdownDescription": "%settings.option.disable.explorer_context.menu%",
                         "default": false
                     },
-                    "EIDE.Cppcheck.ExecutablePath": {
-                        "type": "string",
-                        "scope": "resource",
-                        "markdownDescription": "%settings.cppcheck.exec.path%",
-                        "default": "${userHome}/.eide/tools/cppcheck/cppcheck.exe"
-                    },
                     "EIDE.Builder.ThreadNumber": {
                         "type": "integer",
                         "scope": "resource",
@@ -356,12 +350,6 @@
                         "default": [
                             "# Name=Value"
                         ]
-                    },
-                    "EIDE.Option.EnableClangdConfigGenerator": {
-                        "type": "boolean",
-                        "scope": "resource",
-                        "markdownDescription": "Enable auto generate '.clangd' configuration file.",
-                        "default": true
                     },
                     "EIDE.Option.ShowToolbarInEditerTitle": {
                         "type": "boolean",
@@ -784,14 +772,6 @@
                 }
             },
             {
-                "command": "_cl.eide.project.static-check.cppcheck",
-                "title": "%eide.prj.menus.sub.static-check.cppcheck%"
-            },
-            {
-                "command": "_cl.eide.project.static-check.clear",
-                "title": "%eide.prj.menus.sub.static-check.clear%"
-            },
-            {
                 "command": "_cl.eide.project.source.modify.exclude_list",
                 "title": "%eide.explorer.modify.exclude_list%"
             },
@@ -911,17 +891,17 @@
             {
                 "command": "_cl.eide.project.installCMSISHeaders",
                 "category": "eide",
-                "title": "Install CMSIS Core Headers"
+                "title": "%eide.package.install.cmsis.headers%"
             },
             {
                 "command": "_cl.eide.project.installCmsisLibs",
                 "category": "eide",
-                "title": "Install CMSIS Core Libs"
+                "title": "%eide.package.install.cmsis.libs%"
             },
             {
                 "command": "_cl.eide.project.installCmsisDriverInterface",
                 "category": "eide",
-                "title": "Install CMSIS Common Driver Interface"
+                "title": "%eide.package.install.cmsis.driver_interface%"
             },
             {
                 "command": "_cl.eide.project.addSrcDir",
@@ -1228,10 +1208,6 @@
                 "title": "%eide.project.clangd.rebuildCache%"
             },
             {
-                "command": "_cl.eide.project.clangd.pregenAllTargets",
-                "title": "%eide.project.clangd.pregenAllTargets%"
-            },
-            {
                 "command": "_cl.eide.project.buildAllTargets",
                 "title": "%eide.project.buildAllTargets%"
             },
@@ -1264,18 +1240,9 @@
                 "command": "eide.project.build",
                 "key": "f7",
                 "when": "cl.eide.projectActived && !isInDiffEditor && !cl.eide.reloadPending"
-            },
-            {
-                "command": "_cl.eide.project.static-check.cppcheck",
-                "key": "ctrl+alt+c",
-                "when": "cl.eide.projectActived"
             }
         ],
         "submenus": [
-            {
-                "id": "_cl.eide.menu/ui/project/static-check",
-                "label": "%eide.prj.menus.main.static-check%"
-            },
             {
                 "id": "_cl.eide.menu/ui/project/export",
                 "label": "%eide.prj.menus.main.export%"
@@ -1292,9 +1259,6 @@
                 },
                 {
                     "command": "_cl.eide.project.clangd.rebuildCache"
-                },
-                {
-                    "command": "_cl.eide.project.clangd.pregenAllTargets"
                 }
             ],
             "view/title": [
@@ -1428,12 +1392,12 @@
                 {
                     "command": "eide.debug.start",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "2_build@3"
+                    "group": "3_flash@2"
                 },
                 {
                     "command": "eide.debug.start.attach",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "2_build@4"
+                    "group": "3_flash@3"
                 },
                 {
                     "command": "eide.project.uploadToDevice",
@@ -1443,7 +1407,7 @@
                 {
                     "command": "eide.project.flash.erase.all",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "3_flash@2"
+                    "group": "3_flash@4"
                 },
                 {
                     "command": "eide.project.save",
@@ -1483,55 +1447,47 @@
                 {
                     "command": "_cl.eide.project.relocateRoot",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "5_group@6"
+                    "group": "6_group@5"
                 },
                 {
                     "command": "_cl.eide.project.clangd.rebuildCache",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "5_group@8"
-                },
-                {
-                    "command": "_cl.eide.project.clangd.pregenAllTargets",
-                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "5_group@9"
+                    "group": "6_group@3"
                 },
                 {
                     "command": "_cl.eide.project.buildAllTargets",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "5_group@10"
+                    "group": "2_build@3"
                 },
                 {
                     "command": "eide.open.makelibs.cfg",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "5_group@7"
+                    "group": "6_group@4"
                 },
                 {
                     "command": "eide.project.genBuilderParams",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "5_group@3"
+                    "group": "6_group@1"
                 },
                 {
                     "submenu": "_cl.eide.menu/ui/project/gen-debug-cfg",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "5_group@3"
+                    "group": "6_group@2"
                 },
                 {
                     "command": "_cl.eide.project.showBuildParams",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "6_group"
+                    "group": "7_group@1"
                 },
                 {
                     "command": "_cl.eide.project.show_proj_vars",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "6_group"
+                    "group": "7_group@2"
                 },
                 {
                     "submenu": "_cl.eide.menu/ui/project/export",
+                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
                     "group": "9_group"
-                },
-                {
-                    "submenu": "_cl.eide.menu/ui/project/static-check",
-                    "group": "z_group0@0"
                 },
                 {
                     "command": "_cl.eide.project.source.virtual_folder_add_file",
@@ -1641,7 +1597,7 @@
                 {
                     "command": "_cl.eide.project.unexcludeFolder.childSrcs",
                     "when": "viewItem == FOLDER || viewItem == V_FOLDER || viewItem == FOLDER_ROOT || viewItem == V_FOLDER_ROOT && view == cl.eide.view.projects",
-                    "group": "a_exclude@1"
+                    "group": "a_exclude@2"
                 },
                 {
                     "command": "_cl.eide.project.source.file.compile",
@@ -1690,19 +1646,23 @@
                 },
                 {
                     "command": "_cl.eide.project.addPackage",
-                    "when": "viewItem == PACK && view == cl.eide.view.projects"
+                    "when": "viewItem == PACK && view == cl.eide.view.projects",
+                    "group": "0_install@0"
                 },
                 {
                     "command": "_cl.eide.project.installCMSISHeaders",
-                    "when": "viewItem == PACK && view == cl.eide.view.projects"
+                    "when": "viewItem == PACK && view == cl.eide.view.projects",
+                    "group": "1_cmsis@0"
                 },
                 {
                     "command": "_cl.eide.project.installCmsisLibs",
-                    "when": "viewItem == PACK && view == cl.eide.view.projects"
+                    "when": "viewItem == PACK && view == cl.eide.view.projects",
+                    "group": "1_cmsis@1"
                 },
                 {
                     "command": "_cl.eide.project.installCmsisDriverInterface",
-                    "when": "viewItem == PACK && view == cl.eide.view.projects"
+                    "when": "viewItem == PACK && view == cl.eide.view.projects",
+                    "group": "1_cmsis@2"
                 },
                 {
                     "command": "_cl.eide.project.switchToolchain",
@@ -1711,7 +1671,8 @@
                 },
                 {
                     "command": "_cl.eide.project.setupToolchain",
-                    "when": "viewItem == COMPILE_CONFIGURATION && view == cl.eide.view.projects"
+                    "when": "viewItem == COMPILE_CONFIGURATION && view == cl.eide.view.projects",
+                    "group": "1_group@1"
                 },
                 {
                     "command": "_cl.eide.project.switchUploader",
@@ -1823,18 +1784,6 @@
                     "command": "_cl.eide.project.exportMakefile",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
                     "group": "0_group@3"
-                }
-            ],
-            "_cl.eide.menu/ui/project/static-check": [
-                {
-                    "command": "_cl.eide.project.static-check.cppcheck",
-                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "z_group0@0"
-                },
-                {
-                    "command": "_cl.eide.project.static-check.clear",
-                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
-                    "group": "z_group1@1"
                 }
             ],
             "_cl.eide.menu/ui/project/gen-debug-cfg": [

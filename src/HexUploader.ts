@@ -1000,6 +1000,9 @@ export interface PyOCDFlashOptions extends UploadOption {
     baseAddr?: string;
 
     otherCmds: string;
+
+    /** 可选:擦除芯片前先执行的解锁命令(芯片读保护时,部分目标需先解锁才能全片擦除) */
+    unlockCommand?: string;
 }
 
 class PyOCDUploader extends HexUploader<string[]> {
@@ -1070,9 +1073,16 @@ class PyOCDUploader extends HexUploader<string[]> {
             commands.map((line) => CmdLineHandler.quoteString(line, '"')).join(' ');
 
         // add user cmds
-        const options = this.getUploadOptions<STLinkOptions>();
+        const options = this.getUploadOptions<PyOCDFlashOptions>();
         if (options.otherCmds) {
             commandLine = commandLine.replace(/^pyocd\s+(\w+)/, `pyocd $1 ` + options.otherCmds);
+        }
+
+        // 擦除芯片时可选的解锁命令前置:芯片读保护(RDP)时,部分目标需先解锁才能全片擦除;
+        // 仅对 erase 子命令生效,普通烧录不受影响
+        if (commands.length > 0 && commands[0] === 'erase'
+            && options.unlockCommand && options.unlockCommand.trim()) {
+            commandLine = `${options.unlockCommand.trim()} && ${commandLine}`;
         }
 
         // run

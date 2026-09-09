@@ -50,7 +50,7 @@ import {
     isV42Skeleton, assembleFromSkeleton, splitIntoSkeleton, packTargetForDisk,
 } from './ProjectStorageV42';
 import {
-    rebuildClangdCache, pregenAllTargetsClangd,
+    rebuildClangdCache,
 } from './clangdIntegration';
 import {
     PackInfo, ComponentFileItem, DeviceInfo,
@@ -113,7 +113,7 @@ import { ArrayDelRepetition } from '../lib/node-utility/Utility';
 import {
     copyObject, downloadFileWithProgress,
     sendCommandToTerminal, redirectHost, readGithubRepoFolder, FileCache,
-    genGithubHash, md5, toArray, newMarkdownString, newFileTooltipString, FileTooltipInfo, escapeXml,
+    genGithubHash, md5, toArray, newMarkdownString, newFileTooltipString,
     readGithubRepoTxtFile, downloadFile, notifyReloadWindow, formatPath, execInternalCommand,
     copyAndMakeObjectKeysToLowerCase,
     sortPaths,
@@ -127,11 +127,10 @@ import {
     cxxDemangle,
     DEBUGGER_MAPS
 } from './utility';
-import { concatSystemEnvPath, DeleteDir, exeSuffix, kill, osType, DeleteAllChildren, userhome, getGlobalState } from './Platform';
+import { DeleteDir, exeSuffix, kill, osType, DeleteAllChildren, userhome, getGlobalState } from './Platform';
 import { KeilARMOption, KeilC51Option, KeilParser, KeilRteDependence } from './KeilXmlParser';
 import { VirtualDocument } from './VirtualDocsProvider';
-import { ResInstaller } from './ResInstaller';
-import { ExeCmd, ExecutableOption, ExeFile } from '../lib/node-utility/Executable';
+import { ExeCmd } from '../lib/node-utility/Executable';
 import { CmdLineHandler } from './CmdLineHandler';
 import { WebPanelManager } from './WebPanelManager';
 import * as yml from 'yaml';
@@ -3125,8 +3124,6 @@ export class ProjectExplorer implements CustomConfigurationProvider {
     private dataProvider: ProjectDataProvider;
 
     private _event: events.EventEmitter;
-    private cppcheck_diag: vscode.DiagnosticCollection;
-    private cppcheck_out: vscode.OutputChannel;
 
     private cppToolsApi: CppToolsApi | undefined;
     private cppToolsOut: vscode.OutputChannel;
@@ -3152,7 +3149,6 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             (uid) => this.reloadPrompts.has(uid),
             () => this.reloadPrompts.size > 0
         );
-        this.cppcheck_diag = vscode.languages.createDiagnosticCollection('cppcheck');
 
         this.view = vscode.window.createTreeView('cl.eide.view.projects', {
             treeDataProvider: this.dataProvider,
@@ -3184,7 +3180,6 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         context.subscriptions.push(vscode.commands.registerCommand(ProjTreeItem.ITEM_CLICK_EVENT, (item) => this.OnTreeItemClick(item)));
 
         // create vsc output channel
-        this.cppcheck_out = vscode.window.createOutputChannel('eide-static-check-log');
         this.cppToolsOut = vscode.window.createOutputChannel('eide-cpptools-log');
 
         // register doc event
@@ -3492,9 +3487,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
     private async registerClangdProvider(prj: AbstractProject) {
 
         // clangd 与 cpptools 不再互斥:clangd 集成管线读写的是
-        // .eide-clangd/compile_commands.json + 用户级 config.yaml + clangd.arguments,
+        // <root>/compile_commands.json(根目录单文件库) + 用户级 config.yaml + clangd.arguments,
         // 与 cpptools 的 CustomConfigurationProvider 互不干扰。
-        // 是否启用由 EIDE.Option.EnableClangdConfigGenerator 控制(在管线内部判断)。
+        // clangd 集成管线始终开启。
         await onRegisterClangdProvider(prj);
 
         prj.forceUpdateCpptoolsConfig();
@@ -4030,6 +4025,11 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         }
     }
 
+    /**
+     * 删除目标(多选):QuickPick 勾选多个 target(激活目标标注且不可删),
+     * 模态确认后逐个走删除链路(配置项 + 旁路文件清理 + 保存);
+     * 单项失败不影响其余,结束汇总。
+     */
     public async onDeleteTarget(prjItem?: ProjTreeItem) {
 
         const prj = this.resolveTargetOperationProject(prjItem);
@@ -4038,36 +4038,65 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             return;
         }
 
-        await this.deleteTargetIn(prj);
+        await this.deleteTargetsIn(prj);
     }
 
-    private async deleteTargetIn(prj: AbstractProject) {
+    private async deleteTargetsIn(prj: AbstractProject) {
 
         const manager = prj.getTargetManager();
+        const activeName = manager.getCurrentName();
 
-        const selTarget = await vscode.window.showQuickPick(manager.getNames(), {
-            placeHolder: 'Select a target to delete',
+        const items: vscode.QuickPickItem[] = manager.getNames().map((name) => ({
+            label: name,
+            description: name === activeName ? vscode.l10n.t('$(lock) active') : undefined
+        }));
+
+        const picked = await vscode.window.showQuickPick(items, {
+            canPickMany: true,
+            placeHolder: vscode.l10n.t('Select targets to delete (the active target cannot be deleted)'),
             ignoreFocusOut: true
         });
-        if (selTarget === undefined) { return; }
+        if (picked === undefined || picked.length === 0) { return; }
 
-        const opt_str = await vscode.window.showInformationMessage(
-            `Target '${selTarget}' and its per-target config files will be deleted !, Are you sure ?`,
-            'Yes', 'No'
+        const names = picked.map((item) => item.label).filter((name) => name !== activeName);
+        if (names.length === 0) {
+            GlobalEvent.emit('msg', newMessage('Info',
+                vscode.l10n.t("The active target '{0}' cannot be deleted.", activeName || '')));
+            return;
+        }
+
+        const btnYes = vscode.l10n.t('Yes');
+        const opt_str = await vscode.window.showWarningMessage(
+            vscode.l10n.t('Delete {0} target(s): {1} ? Their per-target config files will be deleted !',
+                names.length, names.join(', ')),
+            { modal: true },
+            btnYes, vscode.l10n.t('No')
         );
 
         /* if user canceled, exit */
-        if (opt_str != 'Yes') { return; }
+        if (opt_str !== btnYes) { return; }
 
-        try {
-            prj.deleteTarget(selTarget);
-        } catch (error) {
-            this.showTargetOperationError(error);
+        let deletedCount = 0;
+        const failed: string[] = [];
+        for (const name of names) {
+            try {
+                prj.deleteTarget(name);
+                deletedCount++;
+            } catch (error) {
+                failed.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+
+        if (failed.length > 0) {
+            this.showTargetOperationError(new Error(failed.join('\n')));
+        }
+        if (deletedCount > 0) {
+            GlobalEvent.emit('msg', newMessage('Info', vscode.l10n.t('{0} target(s) deleted.', deletedCount)));
         }
     }
 
     /**
-     * 重建 clangd 缓存(维修通道):删当前 target 的预生成库 + 后台索引,
+     * 重建 clangd 缓存(维修通道):删根目录编译数据库 + 索引残留,
      * 走重生全链路并唤醒 clangd。日常增删文件走自动管线,不需要它。
      */
     public async onRebuildClangdCache(prjItem?: ProjTreeItem) {
@@ -4081,36 +4110,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         try {
             const result = rebuildClangdCache(prj);
             GlobalEvent.emit('msg', newMessage('Info',
-                `Clangd cache rebuilt for target '${result.targetName}': ${result.entries} files${result.cacheCleared ? '' : ' (nothing cached)'} !`));
-        } catch (error) {
-            this.showTargetOperationError(error);
-        }
-    }
-
-    /**
-     * 批量预生成:为本项目所有 target 各生成一份库(`.eide-clangd/<target>/`),
-     * 缺构建参数的 target 跳过并报告;指针保持指向激活 target。
-     */
-    public async onPregenAllTargetsClangd(prjItem?: ProjTreeItem) {
-
-        const prj = this.resolveTargetOperationProject(prjItem);
-        if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
-            return;
-        }
-
-        try {
-            const result = await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: 'Pregenerating clangd databases for all targets',
-                cancellable: false
-            }, async () => pregenAllTargetsClangd(prj));
-
-            const okPart = result.generated.map((g) => `${g.target} (${g.entries})`).join(', ');
-            const skipPart = result.skipped.length ? `; skipped (no builder.params): ${result.skipped.join(', ')}` : '';
-            GlobalEvent.emit('msg', newMessage(
-                result.skipped.length ? 'Warning' : 'Info',
-                `Clangd databases ready: ${okPart}${skipPart} !`));
+                vscode.l10n.t("Clangd cache rebuilt for target '{0}': {1} files{2} !",
+                    result.targetName, result.entries,
+                    result.cacheCleared ? '' : vscode.l10n.t(' (nothing cached)'))));
         } catch (error) {
             this.showTargetOperationError(error);
         }
@@ -4220,7 +4222,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
             // delete target
             if (e.tooltip === pickBox.buttons[1].tooltip) {
-                this.deleteTargetIn(prj);
+                this.deleteTargetsIn(prj);
             }
 
             pickBox.hide();
@@ -4279,10 +4281,6 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 }
             }
         }
-    }
-
-    clearCppcheckDiagnostic(): void {
-        this.cppcheck_diag.clear();
     }
 
     openHistoryRecords() {
@@ -5161,8 +5159,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 `${AbstractProject.EIDE_DIR}${File.sep}*.dat`,
             ];
 
-            if (SettingManager.instance().isEnableClangdConfigGenerator())
-                defExcludeList.push('.clangd');
+            defExcludeList.push('.clangd'); // clangd 配置生成器常开,导出时排除其配置目录
 
             // if this is a project, prehandle it
             let prj: AbstractProject | undefined;
@@ -6314,325 +6311,6 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
     async showCmsisConfigWizard(uri: vscode.Uri) {
         WebPanelManager.instance().showCmsisConfigWizard(uri);
-    }
-
-    async cppcheckFile(uri: vscode.Uri) {
-
-        // !!! COMMING SOON !!!
-
-        /* const path: any = SettingManager.GetInstance().getCppcheckerExe();
-        if (!path) {
-            const done = await ResInstaller.instance().setOrInstallTools('cppcheck', `Not found 'cppcheck${exeSuffix()}' !`);
-            if (!done) { return; }
-        }
-
-        const exeFile = new File(path);
-        if (!exeFile.IsFile()) {
-            const done = await ResInstaller.instance().setOrInstallTools('cppcheck', `Not found 'cppcheck${exeSuffix()}' ! [path]: ${exeFile.path}`);
-            if (!done) { return; }
-        }
-
-        const activePrj = this.dataProvider.getActiveProject();
-        if (!activePrj) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'No actived project !'));
-            return;
-        }
-
-
-        const cmds: string[] = [
-            `${exeFile.path}`,
-            `--enable=warning`,
-            `--enable=performance`,
-            `--enable=portability`
-        ];
-
-        runShellCommand('cppcheck-file', cmds.join(' ')); */
-    }
-
-    async cppcheckProject(item?: ProjTreeItem) {
-
-        const path: any = SettingManager.GetInstance().getCppcheckerExe();
-        if (!path) {
-            await ResInstaller.instance().setOrInstallTools('cppcheck', `Not found 'cppcheck${exeSuffix()}' !`);
-            return;
-        }
-
-        const exeFile = new File(path);
-        if (!exeFile.IsFile()) {
-            await ResInstaller.instance().setOrInstallTools('cppcheck', `Not found 'cppcheck${exeSuffix()}', [path]: '${exeFile.path}'`);
-            return;
-        }
-
-        const cppcheck_has_platform = (plat: string): boolean => {
-            return File.IsFile(`${exeFile.dir}/platforms/${plat}.xml`);
-        };
-        const cppcheck_has_cfg = (cfgname: string): boolean => {
-            return File.IsFile(`${exeFile.dir}/cfg/${cfgname}.cfg`);
-        };
-
-        const prj = this.getProjectByTreeItem(item);
-        if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'Not found project by this item !'));
-            return;
-        }
-
-        const confTmpFile = File.fromArray([prj.getWsFile().dir, 'conf.cppcheck']);
-        if (!confTmpFile.IsFile()) { /* if not found cppcheck conf template, create it ! */
-            try {
-                const tmpPath = ResManager.GetInstance().GetAppDataDir().path + File.sep + 'cppcheck.xml';
-                fs.copyFileSync(tmpPath, confTmpFile.path);
-            } catch (error) {
-                GlobalEvent.emit('error', error);
-                return;
-            }
-        }
-
-        /* prepare cppcheck */
-        const cmds: string[] = [];
-        const confRootDir: File = prj.getOutputFolder();
-        const confFile: File = File.from(confRootDir.path, 'tmp.cppcheck');
-        confRootDir.CreateDir(true);
-        let cppcheckConf: string = confTmpFile.Read();
-
-        /* get project source info */
-        const toolchain = prj.getToolchain();
-        const prjConfig = prj.GetConfiguration();
-        const depMerge = prjConfig.GetAllMergeDep();
-        const builderOpts = prjConfig.toolchainConfigModel.getOptions();
-        const defMacros: string[] = ['__VSCODE_CPPTOOL']; /* it's for internal force include header */
-        depMerge.incList = ArrayDelRepetition(depMerge.incList.concat(prj.getSourceIncludeList()));
-        const includeList: string[] = depMerge.incList.map(p => prj.resolveEnvVar(p)).map(p => File.ToUnixPath(confRootDir.ToRelativePath(p) || p));
-        const intrHeader: string[] | undefined = toolchain.getForceIncludeHeaders();
-
-        const getSourceList = (project: AbstractProject): string[] => {
-
-            const srcList: string[] = [];
-            const fGoups = project.getFileGroups();
-            const srcFilter = AbstractProject.cppfileFilter;
-
-            for (const group of fGoups) {
-                // skip disabled group
-                if (group.disabled) continue;
-                for (const source of group.files) {
-                    // skip disabled file
-                    if (source.disabled) continue;
-                    // skip non-source and asm file
-                    if (!srcFilter.test(source.file.path)) continue;
-                    const rePath = confRootDir.ToRelativePath(source.file.path);
-                    srcList.push(rePath || source.file.path);
-                }
-            }
-
-            return srcList;
-        }
-
-        /* set cppcheck conf */
-        const is8bit = prjConfig.config.type == 'C51';
-        const cfgList: string[] = ['gnu'];
-
-        if (['Keil_C51'].includes(toolchain.name)) {
-            GlobalEvent.emit('msg', newMessage('Warning', `We don't support cppcheck for '${toolchain.name}' !`));
-            return;
-        }
-
-        const macroDefines: { name: string; value?: string; }[] = defMacros.concat(depMerge.defineList)
-            .map(item => {
-                const s = item.indexOf('=');
-                if (s !== -1) {
-                    return {
-                        name: item.substring(0, s),
-                        value: item.substring(s + 1)
-                    };
-                } else {
-                    return {
-                        name: item
-                    }
-                }
-            });
-        toolchain.getInternalDefines(<any>prjConfig.config.toolchainConfig, builderOpts).forEach(d => {
-            if (d.type === 'var')
-                macroDefines.push({
-                    name: d.name,
-                    value: d.value
-                });
-        });
-
-        if (toolchain.name == 'ANY_GCC' && toolchain.getToolchainPrefix) {
-            const prefix = toolchain.getToolchainPrefix();
-            if (/avr/i.test(prefix)) { // it's avr compiler
-                cfgList.push('avr');
-            } else if (prefix == '') { // it's local compiler
-                cfgList.push('std');
-            }
-        }
-
-        let cppcheck_plat: string = 'unix32';
-        if (is8bit) {
-            if (os.platform() == 'win32' && cppcheck_has_platform('mcs51'))
-                cppcheck_plat = 'mcs51';
-            else
-                cppcheck_plat = 'avr8';
-        }
-
-        const sourceList = getSourceList(prj);
-        cppcheckConf = cppcheckConf
-            .replace('${cppcheck_build_folder}', File.normalize(prj.getOutputRoot()))
-            .replace('${platform}', cppcheck_plat)
-            .replace('${lib_list}', cfgList.map((str) => `<library>${escapeXml(str)}</library>`).join(os.EOL + '\t\t'))
-            .replace('${include_list}', includeList.map((str) => `<dir name="${escapeXml(str)}/"/>`).join(os.EOL + '\t\t'))
-            .replace('${macro_list}', macroDefines.map((item) => 
-                `<define name="${item.name}" value="${escapeXml(item.value ?? '')}"/>`).join(os.EOL + '\t\t'))
-            .replace('${source_list}', sourceList.map((str) => `<dir name="${escapeXml(str)}"/>`).join(os.EOL + '\t\t'));
-
-        confFile.Write(cppcheckConf);
-
-        /* make command */
-
-        let max_cpus = os.cpus().length;
-        if (max_cpus > sourceList.length * 2) max_cpus = sourceList.length;
-        if (max_cpus < 4) max_cpus = 4;
-        if (max_cpus > 12) max_cpus = 12;
-        cmds.push(
-            '-j', max_cpus.toString(),
-            `--error-exitcode=0`,
-            `--report-progress`,
-            `--enable=warning`,
-            `--enable=performance`,
-            `--enable=portability`,
-            `--project=${confFile.path}`,
-            `--relative-paths=${prj.getWsFile().dir}`
-        );
-
-        if (intrHeader && intrHeader.length > 0) {
-            for (const path of intrHeader) {
-                cmds.push(`--include=${path}`);
-            }
-        }
-
-        /* launch process */
-
-        await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: 'Checking Project',
-            cancellable: true
-        }, (progress, cancel): Thenable<void> => {
-
-            return new Promise((_resolve) => {
-
-                let isResolved = false;
-                const resolve = (data: any | undefined) => {
-                    if (isResolved) return;
-                    isResolved = true;
-                    _resolve(data);
-                };
-
-                const process = new ExeCmd();
-                const opts: ExecutableOption = {
-                    encoding: 'utf8',
-                    shell: ResManager.GetInstance().getCMDPath(),
-                    env: concatSystemEnvPath([exeFile.dir, `${exeFile.dir}${File.sep}cfg`])
-                };
-
-                // user want cancel operations
-                cancel.onCancellationRequested(() => {
-                    const pid = process.pid();
-                    if (pid) { kill(pid); }
-                });
-
-                // user canceled, but process not launch, so we need
-                // kill process after it launched
-                process.on('launch', () => {
-                    if (cancel.isCancellationRequested) {
-                        const pid = process.pid();
-                        if (pid) { kill(pid); }
-                    }
-                });
-
-                // parse cppcheck progress
-                // example: '29/37 files checked 96% done'
-                const progMatcher = /^\d+\/\d+\s+files\s+checked\s+(\d+)%/i;
-                let prev_prog: number = 0;
-                process.on('line', (line) => {
-                    const mRes = progMatcher.exec(line);
-                    if (mRes && mRes.length > 1) {
-                        const cur_prog = parseInt(mRes[1]);
-                        progress.report({ message: line, increment: cur_prog - prev_prog });
-                        prev_prog = cur_prog;
-                    }
-                    else if (line.startsWith('Checking') || line.startsWith('checking')) {
-                        return; // ignore other progress info
-                    }
-                    else { // other msg ? output to panel
-                        this.cppcheck_out.appendLine(line);
-                    }
-                });
-
-                const pattern = {
-                    "regexp": "^(.+):(\\d+):(\\d+):\\s+(\\w+):\\s+(.*)$",
-                    "file": 1,
-                    "line": 2,
-                    "column": 3,
-                    "severity": 4,
-                    "message": 5
-                };
-
-                const toVscServerity = (str: string): vscode.DiagnosticSeverity => {
-                    if (str.startsWith('err')) return vscode.DiagnosticSeverity.Error;
-                    if (str.startsWith('warn')) return vscode.DiagnosticSeverity.Warning;
-                    if (str == 'note' || str.startsWith('info')) return vscode.DiagnosticSeverity.Information;
-                    return vscode.DiagnosticSeverity.Hint;
-                };
-
-                /* clear old diag and status */
-                this.clearCppcheckDiagnostic();
-                this.cppcheck_out.clear();
-
-                const errMatcher = new RegExp(pattern.regexp, 'i');
-                let diagnosticCnt: number = 0;
-                process.on('errLine', (line) => {
-                    // match gcc format error msg
-                    const mRes = errMatcher.exec(line);
-                    if (mRes && mRes.length > 5) {
-                        diagnosticCnt += 1; /* increment cnt */
-                        const fpath = prj.ToAbsolutePath(mRes[pattern.file]);
-                        const uri = vscode.Uri.file(fpath);
-                        const diags = Array.from(this.cppcheck_diag.get(uri) || []);
-                        const line = parseInt(mRes[pattern.line]);
-                        const col = parseInt(mRes[pattern.column]);
-                        const col_s = col > 0 ? (col - 1) : 0;
-                        const range = new vscode.Range(
-                            new vscode.Position(line - 1, col_s),
-                            new vscode.Position(line - 1, col_s + 10));
-                        const diag = new vscode.Diagnostic(range, mRes[pattern.message], toVscServerity(mRes[pattern.severity]));
-                        diag.source = 'cppcheck';
-                        diags.push(diag);
-                        this.cppcheck_diag.set(uri, diags);
-                    }
-                    // we not need log other cppcheck err msg
-                });
-
-                process.on('close', (exitInfo) => {
-                    resolve(undefined);
-                    if (cancel.isCancellationRequested == false) { // user not canceled 
-                        if (exitInfo.code != 0) { // cppcheck launch failed
-                            GlobalEvent.emit('msg', newMessage('Warning', 'Cppcheck launch failed, please check error msg on the output panel !'));
-                            this.cppcheck_out.show();
-                        }
-                        else if (diagnosticCnt == 0) {
-                            GlobalEvent.emit('msg', newMessage('Info', 'Cppcheck not found any problems !'));
-                        }
-                    }
-                });
-
-                process.on('error', (err) => {
-                    GlobalEvent.emit('msg', ExceptionToMessage(err));
-                });
-
-                const _args: string[] = cmds.map(s => (s.includes(' ') && !s.trimStart().startsWith('"')) ? `"${s}"` : s);
-                this.cppcheck_out.append(`>>> Exec cppcheck\n -> ${exeFile.name} ${_args.join(' ')}\n\n`);
-                process.Run(exeFile.name, _args, opts);
-            });
-        });
     }
 
     private install_lock: boolean = false;
@@ -7908,6 +7586,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 executable: _elfPath,
                 runToEntryPoint: "main",
                 targetId: '<mcu-name>',
+                // pyocd gdbserver 启动输出与 cortex-debug 内置检测文本不一致时,
+                // 用宽松关键字 "port" 兜底判定服务器已启动
+                overrideGDBServerStartedRegex: 'port',
                 serverArgs: []
             }
         };
@@ -7916,7 +7597,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const toolchain = prj.getToolchain();
 
         if (toolchain.name == 'AC5' || toolchain.name == 'AC6') {
-            debugConfig['executable'] = undefined;
+            // pyocd 模板保留 executable 指向 .axf(cortex-debug 以它加载符号),
+            // jlink/openocd 模板维持旧行为(仅 loadFiles/symbolFiles)
+            debugConfig['executable'] = type == 'pyocd' ? `${_outFullName}.axf` : undefined;
             debugConfig['loadFiles'] = [ `${_outFullName}.hex` ];
             debugConfig['symbolFiles'] = [ `${_outFullName}.axf` ];
         }
