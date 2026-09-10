@@ -39,6 +39,7 @@ import {
 import { File } from '../lib/node-utility/File';
 import { FileWatcher } from '../lib/node-utility/FileWatcher';
 import { RefreshStateMachine, RefreshState } from './RefreshStateMachine';
+import { EIDE_DIR as EIDE_DIR_CONST, HEADER_FILE_FILTER } from './ProjectConsts';
 import { TargetManager, TargetManagerHost, TargetEventType, TargetSnapshotContext, TargetRestoreContext, TargetSwitchResult } from './TargetManager';
 import { getTargetLibsFileName, getTargetOptionBytesFileName, removeIniSection, renameIniSection, copyIniSection } from './TargetSidecars';
 import { updateClangdIntegration } from './clangdIntegration';
@@ -833,7 +834,8 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
 
     static readonly workspaceSuffix = '.code-workspace';
     static readonly vsCodeDir = '.vscode';
-    static readonly EIDE_DIR = '.eide';
+    /** 项目元数据目录名(值定义在零依赖的 ProjectConsts, 供低层模块直接引用而不必反向依赖本类) */
+    static readonly EIDE_DIR: string = EIDE_DIR_CONST;
 
     static readonly cppConfigName = 'c_cpp_properties.json';
     static readonly prjConfigName = 'eide.yml';
@@ -841,7 +843,8 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
     static readonly importerWarningBaseName = 'importer.warning.txt';
 
     // avaliable source files
-    static readonly headerFilter: RegExp = /\.(?:h|hxx|hpp|inc)$/i;
+    /** 头文件后缀匹配(值定义在零依赖的 ProjectConsts, 同上) */
+    static readonly headerFilter: RegExp = HEADER_FILE_FILTER;
     static readonly cppfileFilter: RegExp = /\.(?:c|cpp|c\+\+|cc|cxx)$/i;
     static readonly libFileFilter: RegExp = /\.(?:lib|a|o|obj)$/i;
     static readonly asmfileFilter: RegExp = /\.(?:s|asm|a51)$/i;

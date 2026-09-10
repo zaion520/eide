@@ -318,6 +318,21 @@ if (!runtimeSccs.length) {
             }
         }
     }
+
+    // 运行时图的最小断边集 = 消除运行时耦合的最少改动清单
+    const rtCut = minFeedbackEdges(files, runtimeDep);
+    const afterCut = findSCCs(files, withoutEdges(files, runtimeDep, rtCut));
+    const rtOutDeg = (f) => (runtimeDep.get(f) || []).filter(e => runtimeCore.has(e.to)).length;
+    console.log('');
+    console.log('  [运行时] 最小断边集: ' + rtCut.size + ' 条 (切完剩余运行时 SCC: ' + afterCut.length + ')');
+    const orderedRt = [...rtCut].sort((a, b) => rtOutDeg(a.split(' -> ')[0]) - rtOutDeg(b.split(' -> ')[0]));
+    let k = 0;
+    for (const key of orderedRt) {
+        k++;
+        const [from, to] = key.split(' -> ');
+        const e = (runtimeDep.get(from) || []).find(x => x.to === to);
+        console.log('    ' + String(k).padStart(2) + '. ' + from + ':' + (e ? e.line : '?') + ' -> ' + to);
+    }
 }
 
 // ---- 度数排名 ----

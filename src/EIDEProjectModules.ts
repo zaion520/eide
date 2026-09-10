@@ -48,7 +48,7 @@ import {
     ProbeRSFlashOptions,
     CustomFlashOptions 
 } from "./HexUploader";
-import { AbstractProject } from "./EIDEProject";
+import { EIDE_DIR } from './ProjectConsts';
 import { SettingManager } from "./SettingManager";
 import { WorkspaceManager } from "./WorkspaceManager";
 import * as utility from './utility';
@@ -2106,7 +2106,7 @@ class StcgalUploadModel extends UploadConfigModel<StcgalFlashOption> {
             bin: '',
             eepromImgPath: 'null',
             extraOptions: '',
-            options: `${AbstractProject.EIDE_DIR}/stc.flash.json`
+            options: `${EIDE_DIR}/stc.flash.json`
         };
     }
 }
@@ -2281,7 +2281,7 @@ class STLinkUploadModel extends UploadConfigModel<STLinkOptions> {
             }
             // update option bytes file name
             const targetID = prjConfig.config.mode;
-            this.data.optionBytes = `${AbstractProject.EIDE_DIR}/targets/${targetID}/st.option.bytes.ini`;
+            this.data.optionBytes = `${EIDE_DIR}/targets/${targetID}/st.option.bytes.ini`;
         });
     }
 
@@ -2473,7 +2473,7 @@ class STLinkUploadModel extends UploadConfigModel<STLinkOptions> {
             speed: 4000,
             address: '0x08000000',
             elFile: 'None',
-            optionBytes: `${AbstractProject.EIDE_DIR}/st.option.bytes.ini`,
+            optionBytes: `${EIDE_DIR}/st.option.bytes.ini`,
             otherCmds: ''
         };
     }
@@ -2582,7 +2582,7 @@ class PyOCDUploadModel extends UploadConfigModel<PyOCDFlashOptions> {
         this.on('NotifyUpdate', (prjConfig) => {
             // update option bytes file name
             const targetID = prjConfig.config.mode.toLowerCase();
-            this.data.config = `${AbstractProject.EIDE_DIR}/${targetID}.pyocd.yaml`;
+            this.data.config = `${EIDE_DIR}/${targetID}.pyocd.yaml`;
         });
     }
 
@@ -2733,7 +2733,7 @@ class PyOCDUploadModel extends UploadConfigModel<PyOCDFlashOptions> {
             targetName: 'cortex_m',
             baseAddr: '0x08000000',
             speed: '4M',
-            config: `${AbstractProject.EIDE_DIR}/pyocd.yaml`,
+            config: `${EIDE_DIR}/pyocd.yaml`,
             otherCmds: '',
             unlockCommand: ''
         };

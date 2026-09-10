@@ -951,15 +951,13 @@ export class ARMCodeBuilder extends CodeBuilder {
         return sctFile;
     }
 
+    /**
+     * @deprecated 已下沉到 `ArmCpuUtils.getFpuSuffix`(该函数只依赖 ArmCpuUtils)。
+     * 保留转发以兼容既有调用方;新代码请直接用 `ArmCpuUtils.getFpuSuffix`,
+     * 避免 `ToolchainManager → CodeBuilder` 这类仅为取一个纯函数而生的运行时依赖。
+     */
     static getFpuSuffix(cpu: string, hardOption: FloatingHardwareOption): string {
-        switch (hardOption) {
-            case 'single':
-                return ArmCpuUtils.hasFpu(cpu) ? '-sp' : '';
-            case 'double':
-                return ArmCpuUtils.hasFpu(cpu, true) ? '-dp' : '';
-            default: // none
-                return '';
-        }
+        return ArmCpuUtils.getFpuSuffix(cpu, hardOption);
     }
 
     protected getMcuMemorySize(): MemorySize | undefined {

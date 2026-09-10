@@ -36,7 +36,8 @@ import {
 import { IToolchian } from './ToolchainManager';
 import { GlobalEvent } from './GlobalEvents';
 import * as fs from 'fs';
-import { AbstractProject } from './EIDEProject';
+import type { AbstractProject } from './EIDEProject';
+import { HEADER_FILE_FILTER } from './ProjectConsts';
 import { ExceptionToMessage, newMessage } from './Message';
 import { ResManager } from './ResManager';
 import { ExeCmd } from '../lib/node-utility/Executable';
@@ -1044,14 +1045,14 @@ export class PackageManager {
 
                     switch (f.$category) {
                         case 'include':
-                            if (AbstractProject.headerFilter.test(f.$name)) {
+                            if (HEADER_FILE_FILTER.test(f.$name)) {
                                 item.headerList.push(comp_item);
                             } else {
                                 item.incDirList.push(comp_item);
                             }
                             break;
                         case 'header':
-                            if (AbstractProject.headerFilter.test(f.$name))
+                            if (HEADER_FILE_FILTER.test(f.$name))
                                 item.headerList.push(comp_item);
                             break;
                         case 'source':

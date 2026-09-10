@@ -341,3 +341,25 @@ export function hasFpu(cpu: string, hasDp?: boolean) {
         }
     }
 }
+
+/**
+ * 由 CPU 与浮点选项推导 FPU 后缀(编入目标名/命令行的 `-sp` / `-dp`)。
+ *
+ * 原先定义为 `CodeBuilder.ARMCodeBuilder.getFpuSuffix`, 而 `ToolchainManager`
+ * 需要用它 —— 于是 `ToolchainManager → CodeBuilder` 成为运行时环的一条边。
+ * 该函数只依赖本模块的 `hasFpu`, 因此下沉到这里(纯函数, 零新依赖),
+ * `ARMCodeBuilder.getFpuSuffix` 保留为转发以兼容既有调用方。
+ *
+ * 注意: 参数用结构化联合类型而非 import `FloatingHardwareOption`,
+ * 否则会从叶子模块反向依赖 `EIDEProjectModules` 重新引入环。
+ */
+export function getFpuSuffix(cpu: string, hardOption: 'none' | 'single' | 'double'): string {
+    switch (hardOption) {
+        case 'single':
+            return hasFpu(cpu) ? '-sp' : '';
+        case 'double':
+            return hasFpu(cpu, true) ? '-dp' : '';
+        default: // none
+            return '';
+    }
+}

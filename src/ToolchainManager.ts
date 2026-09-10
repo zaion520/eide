@@ -28,7 +28,7 @@ import { SettingManager } from "./SettingManager";
 import { ResManager } from "./ResManager";
 import { GlobalEvent } from "./GlobalEvents";
 import { newMessage, ExceptionToMessage } from "./Message";
-import { ARMCodeBuilder } from "./CodeBuilder";
+import { getFpuSuffix } from './ArmCpuUtils';
 import * as platform from './Platform';
 import * as child_process from 'child_process';
 import * as fs from 'fs';
@@ -1829,7 +1829,7 @@ class AC5 implements IToolchian {
 
             const cfg: ArmBaseBuilderConfigData = <any>builderCfg;
             const mcpu_id = cfg.cpuType.toLowerCase() + 
-                ARMCodeBuilder.getFpuSuffix(cfg.cpuType, cfg.floatingPointHardware);
+                getFpuSuffix(cfg.cpuType, cfg.floatingPointHardware);
     
             if (this.mcpuMap[mcpu_id]) {
 
