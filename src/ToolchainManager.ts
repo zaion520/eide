@@ -256,8 +256,8 @@ export class ToolchainManager {
                             res = this.getToolchainByName(toolchainName);
                         } else {
                             res = this.getToolchainByName('AC5');
-                            GlobalEvent.emit('msg', newMessage('Warning',
-                                'Invalid toolchain name \'' + toolchainName + '\' !, use default toolchain.'));
+                            GlobalEvent.show_msgbox('Warning',
+                                'Invalid toolchain name \'' + toolchainName + '\' !, use default toolchain.');
                         }
                 }
                 break;
@@ -272,8 +272,8 @@ export class ToolchainManager {
                         }
                         else {
                             res = this.getToolchainByName('Keil_C51');
-                            GlobalEvent.emit('msg', newMessage('Warning',
-                                'Invalid toolchain name \'' + toolchainName + '\' !, use default toolchain.'));
+                            GlobalEvent.show_msgbox('Warning',
+                                'Invalid toolchain name \'' + toolchainName + '\' !, use default toolchain.');
                         }
                 }
                 break;
@@ -417,7 +417,7 @@ export class ToolchainManager {
             }
         } catch (error) {
             const msg = `Fail to migrate builderOptions. see log for details.`;
-            GlobalEvent.emit('msg', newMessage('Error', msg));
+            GlobalEvent.show_msgbox('Error', msg);
             GlobalEvent.log_error(error);
             GlobalEvent.log_show();
         }
@@ -549,7 +549,7 @@ class KeilC51 implements IToolchian {
                 try {
                     fs.unlinkSync(libFile.path);
                 } catch (error) {
-                    GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                    GlobalEvent.show_msgbox('Hidden', error);
                     throw new Error('Delete exist lib failed !, [path]: ' + libFile.path);
                 }
             }
@@ -562,7 +562,7 @@ class KeilC51 implements IToolchian {
             try {
                 fs.copyFileSync(tmpLib.path, libFile.path);
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', error);
                 throw new Error('Create empty C51 LIB failed !');
             }
         }
@@ -804,7 +804,7 @@ class SDCC implements IToolchian {
             return this.__lastActivedTargetInfo;
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
             return <ToolchainTargetSupportedInfo>{
                 machine: 'sdcc',
                 archs: this.defaultProcessors,
@@ -3468,7 +3468,7 @@ class MTI_GCC implements IToolchian {
             return targetInfo;
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
             return undefined;
         }
     }
@@ -3743,7 +3743,7 @@ class RISCV_GCC implements IToolchian {
             return targetInfo;
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
             return undefined;
         }
     }

@@ -16,12 +16,12 @@ export function requestAndActivateLicence(toolchainId: ToolchainName) {
 
     const toolchain_ = ToolchainManager.getInstance().getToolchainByName(toolchainId);
     if (!toolchain_) {
-        GlobalEvent.emit('msg', newMessage('Error', `Not found this toolchain: '${toolchainId}' !`));
+        GlobalEvent.show_msgbox('Error', `Not found this toolchain: '${toolchainId}' !`);
         return;
     }
 
     if (!ToolchainManager.getInstance().isToolchainPathReady(toolchainId)) {
-        GlobalEvent.emit('msg', newMessage('Warning', view_str$prompt$requestAndActivateLicence_warn_setupPath));
+        GlobalEvent.show_msgbox('Warning', view_str$prompt$requestAndActivateLicence_warn_setupPath);
         return;
     }
 
@@ -30,7 +30,7 @@ export function requestAndActivateLicence(toolchainId: ToolchainName) {
             requestAndActivate_COSMIC_STM8(toolchain_);
             break;
         default:
-            GlobalEvent.emit('msg', newMessage('Warning', `We not support this toolchain: '${toolchainId}' !`));
+            GlobalEvent.show_msgbox('Warning', `We not support this toolchain: '${toolchainId}' !`);
             break;
     }
 }

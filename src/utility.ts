@@ -36,8 +36,6 @@ import { NetRequest, NetResponse } from '../lib/node-utility/NetRequest';
 import { File } from '../lib/node-utility/File';
 import { GitFileInfo } from './WebInterface/GithubInterface';
 import * as platform from './Platform';
-import { SevenZipper } from './Compress';
-import { ResManager } from './ResManager';
 import { ExeCmd } from '../lib/node-utility/Executable';
 import { GlobalEvent } from './GlobalEvents';
 import { SettingManager } from './SettingManager';
@@ -162,8 +160,8 @@ export async function probers_install(cwd?: string) {
     } else if (platform.osType() === 'linux' || platform.osType() === 'darwin') {
         commandLine = `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/probe-rs/probe-rs/releases/latest/download/probe-rs-tools-installer.sh | sh`;
     } else {
-        GlobalEvent.emit('msg', newMessage('Warning', 
-            `Not support installer for '${platform.osType()}' platform ! Please goto https://probe.rs/docs/getting-started/installation/`));
+        GlobalEvent.show_msgbox('Warning', 
+            `Not support installer for '${platform.osType()}' platform ! Please goto https://probe.rs/docs/getting-started/installation/`);
         return;
     }
 
@@ -245,21 +243,6 @@ export function generateRandomStr(len?: number): string {
     if (len == undefined || len < 16) len = 16;
     const randomName = crypto.randomBytes(len / 2).toString('hex'); // 生成一个32字符长的十六进制字符串
     return randomName;
-}
-
-export function generateDotnetProgramCmd(programFile: File, args?: string[]): string {
-    // 在非 win32 平台上，使用 dotnet 命令去直接执行程序的本体.
-    // 命令 "<my_program>.exe" 的等价替换是 "dotnet <my_program_dir>/<my_program>.dll"
-    if (platform.osType() != 'win32') {
-        let dllpath = [programFile.dir, `${programFile.noSuffixName}.dll`].join('/');
-        let commandLine = `dotnet ${CmdLineHandler.quoteString(File.ToLocalPath(dllpath), '"')}`;
-        args?.forEach(p => {
-            commandLine += ' ' + CmdLineHandler.quoteString(p, '"');
-        });
-        return commandLine;
-    } else {
-        return CmdLineHandler.getCommandLine(programFile.noSuffixName, args || []);
-    }
 }
 
 export function timeStamp(): string {
@@ -518,7 +501,7 @@ export function getGccBinutilsVersion(gccBinDirPath: string, toolprefix?: string
             }
         }
     } catch (error) {
-        GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+        GlobalEvent.show_msgbox('Hidden', error);
     }
 
     return undefined;
@@ -595,7 +578,7 @@ export function execInternalCommand(command: string, cwd?: string, cancel?: vsco
 
         cancel?.onCancellationRequested(_ => {
             if (!platform.kill(<number>proc.pid())) {
-                GlobalEvent.emit('msg', newMessage('Warning', `Can not kill process: ${proc.pid()} !`));
+                GlobalEvent.show_msgbox('Warning', `Can not kill process: ${proc.pid()} !`);
             }
         });
 
@@ -603,12 +586,9 @@ export function execInternalCommand(command: string, cwd?: string, cancel?: vsco
     });
 }
 
-export async function notifyReloadWindow(msg: string) {
-    const resp = await vscode.window.showInformationMessage(msg, 'Ok', 'Later');
-    if (resp == 'Ok') {
-        await vscode.commands.executeCommand('workbench.action.reloadWindow');
-    }
-}
+// notifyReloadWindow 已下沉到叶子模块 src/UiNotify.ts
+// (原先 SettingManager 为了用它而反向依赖 utility, 形成运行时环), 此处保留 re-export 兼容既有调用方
+export { notifyReloadWindow } from './UiNotify';
 
 export function newMarkdownString(lines: string | string[]): vscode.MarkdownString {
     if (typeof lines == 'string') {
@@ -825,10 +805,6 @@ export function sha1(str_or_buff: string | Buffer): string {
     const md5 = crypto.createHash('sha1');
     md5.update(str_or_buff);
     return md5.digest('hex');
-}
-
-export function newSevenZipperInstance(): SevenZipper {
-    return new SevenZipper(ResManager.GetInstance().Get7zDir());
 }
 
 export async function openUrl(url: string): Promise<Error | undefined> {

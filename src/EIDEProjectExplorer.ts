@@ -33,6 +33,7 @@ import * as ini from 'ini';
 import * as jsonc_parser from 'jsonc-parser';
 
 import { File } from '../lib/node-utility/File';
+import { OperationLock, OpLockKeys } from './OperationLock';
 import { ResManager } from './ResManager';
 import { GlobalEvent } from './GlobalEvents';
 import { AbstractProject, CheckError, DataChangeType, VirtualSource, SourceFileOptions, EIDE_FILE_OPTION_VERSION } from './EIDEProject';
@@ -43,6 +44,7 @@ import {
     ProjectTargetInfo, ProjectConfigData, ProjectType, ProjectConfiguration, ProjectBaseApi
 } from './EIDETypeDefine';
 import { applyTargetToConfigData, makeTargetInfo, formatBuildAllSummary, BuildTargetResult } from './TargetManager';
+import { BuildAllStatus } from './BuildAllStatus';
 import {
     computeLevelDelta, findProjectRootsUnder, rewriteConfigRelativePaths, auditExternalReferences,
 } from './ProjectRootTool';
@@ -122,7 +124,6 @@ import {
     getGccSystemSearchList,
     openocd_getConfigList,
     pyocd_getTargetList,
-    generateDotnetProgramCmd,
     isGccFamilyToolchain,
     cxxDemangle,
     DEBUGGER_MAPS
@@ -153,7 +154,6 @@ import { jsonc } from 'jsonc';
 import { SimpleUIConfig, SimpleUIConfigData_input, SimpleUIConfigData_options, SimpleUIConfigData_text, SimpleUIConfigData_table, SimpleUIConfigData_boolean, SimpleUIConfigData_divider, SimpleUIConfigData_tag } from "./SimpleUIDef";
 import { StatusBarManager } from './StatusBarManager';
 import { doMigration, detectProject } from './EIDEProjectMigration';
-import { onRegisterClangdProvider } from './clangdConfigProvider';
 import * as hooks from './Hooks';
 
 enum TreeItemType {
@@ -421,7 +421,7 @@ export class ProjTreeItem extends vscode.TreeItem {
                     dark: iconFile.path
                 };
             } else {
-                GlobalEvent.emit('msg', newMessage('Warning', 'Load Icon \'' + iconName + '\' Failed!'));
+                GlobalEvent.show_msgbox('Warning', 'Load Icon \'' + iconName + '\' Failed!');
             }
         }
     }
@@ -1867,16 +1867,12 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
 
         const wsFile: File = new File(workspaceFilePath);
         if (!wsFile.IsFile()) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: invalid_project_path + wsFile.path
-            });
+            GlobalEvent.show_msgbox('Warning', invalid_project_path + wsFile.path);
             return undefined;
         }
 
         if (!detectProject(File.from(wsFile.dir))) {
-            GlobalEvent.emit('msg', newMessage('Warning', `File not existed, [path]: ${wsFile.dir}`));
+            GlobalEvent.show_msgbox('Warning', `File not existed, [path]: ${wsFile.dir}`);
             return undefined;
         }
 
@@ -1888,7 +1884,7 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
             GlobalEvent.emit('project.opened', prj);
             return prj;
         } catch (err) {
-            GlobalEvent.emit('msg', newMessage('Warning', project_load_failed));
+            GlobalEvent.show_msgbox('Warning', project_load_failed);
             GlobalEvent.log_error(err);
             GlobalEvent.emit('globalLog.show');
             return undefined;
@@ -1951,7 +1947,7 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
             return prj;
         } catch (err) {
             GlobalEvent.emit('error', err);
-            GlobalEvent.emit('msg', newMessage('Warning', project_load_failed));
+            GlobalEvent.show_msgbox('Warning', project_load_failed);
             return undefined;
         }
     }
@@ -1978,8 +1974,8 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
 
         let catchErr = (error: any) => {
             const msg = `${view_str$operation$import_failed}: ${(<Error>error).message}`;
-            GlobalEvent.emit('msg', newMessage('Warning', msg));
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Warning', msg);
+            GlobalEvent.show_msgbox('Hidden', error);
         }
 
         switch (option.type) {
@@ -2957,8 +2953,8 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
             }
 
         } catch (error) {
-            GlobalEvent.emit('msg', newMessage('Warning', `Create project failed !, msg: ${(<Error>error).message}`));
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Warning', `Create project failed !, msg: ${(<Error>error).message}`);
+            GlobalEvent.show_msgbox('Hidden', error);
         }
     }
 
@@ -3015,7 +3011,7 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
                 this.slnRecord = JSON.parse(this.recFile.Read());
             } catch (err) {
                 this.slnRecord = [];
-                GlobalEvent.emit('msg', ExceptionToMessage(err, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', err);
             }
         }
     }
@@ -3216,7 +3212,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             }));
 
         // register project hook
-        GlobalEvent.on('project.opened', (prj) => this.onProjectOpened(prj));
+        GlobalEvent.on('project.opened', (prj) => this.onProjectOpened(<AbstractProject>prj));
         GlobalEvent.on('project.closed', (uid) => this.onProjectClosed(uid));
         GlobalEvent.on('project.activeStatusChanged', (uid) => this.notifyCpptoolsRefresh());
 
@@ -3489,9 +3485,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         // clangd 与 cpptools 不再互斥:clangd 集成管线读写的是
         // <root>/compile_commands.json(根目录单文件库) + 用户级 config.yaml + clangd.arguments,
         // 与 cpptools 的 CustomConfigurationProvider 互不干扰。
-        // clangd 集成管线始终开启。
-        await onRegisterClangdProvider(prj);
-
+        // clangd 集成管线始终开启,更新由 UpdateCppConfig 主链的 doUpdateClangdSupport 统一触发
+        // (cppConfigChanged 监听器路径已移除:它会在 doUpdateCpptoolsConfig 阶段提前跑一遍,
+        //  此时 builder.params 尚未刷新,读到旧参数,且与主链重复执行、EISDIR 噪音翻倍)。
         prj.forceUpdateCpptoolsConfig();
     }
 
@@ -3556,7 +3552,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const prj = this.resolveTargetOperationProject(item);
         if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
 
@@ -3574,11 +3570,11 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const delta = computeLevelDelta(oldRoot, newRoot);
         if (delta === undefined) {
-            GlobalEvent.emit('msg', newMessage('Warning', `Relocate only supports moving the project root up or down along its own directory chain !`));
+            GlobalEvent.show_msgbox('Warning', `Relocate only supports moving the project root up or down along its own directory chain !`);
             return;
         }
         if (fs.existsSync(NodePath.join(newRoot, '.eide'))) {
-            GlobalEvent.emit('msg', newMessage('Warning', `Target directory already contains an '.eide' folder !`));
+            GlobalEvent.show_msgbox('Warning', `Target directory already contains an '.eide' folder !`);
             return;
         }
 
@@ -3586,7 +3582,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const oldEideDir = NodePath.join(oldRoot, '.eide');
         const oldCfgText = fs.readFileSync(NodePath.join(oldEideDir, 'eide.yml'), 'utf8');
         if (!isV42Skeleton(yaml.parse(oldCfgText))) {
-            GlobalEvent.emit('msg', newMessage('Warning', `Project file is not v4.2 layout, please reload the project and try again !`));
+            GlobalEvent.show_msgbox('Warning', `Project file is not v4.2 layout, please reload the project and try again !`);
             return;
         }
 
@@ -3655,13 +3651,13 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                     [`# external reference audit (generated by EIDE)`, ...reportLines].join('\n'), 'utf8');
             } catch { /* ignore */ }
 
-            GlobalEvent.emit('msg', newMessage(
+            GlobalEvent.show_msgbox(
                 brokenCount > 0 ? 'Warning' : 'Info',
                 `Project root relocated. External refs: ${report.length}, broken: ${brokenCount}. See 'root-audit.report.txt'.`
-            ));
+            );
             if (unrewritten.length > 0) {
-                GlobalEvent.emit('msg', newMessage('Warning',
-                    `${unrewritten.length} path(s) could not be rewritten mechanically, please check them: ${unrewritten.join(', ')}`));
+                GlobalEvent.show_msgbox('Warning',
+                    `${unrewritten.length} path(s) could not be rewritten mechanically, please check them: ${unrewritten.join(', ')}`);
             }
 
             // 5. reopen the project from its new root
@@ -3669,11 +3665,11 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             if (reopenedWs && fs.existsSync(reopenedWs)) {
                 await this.dataProvider.OpenProject(reopenedWs, true);
             } else {
-                GlobalEvent.emit('msg', newMessage('Info', `Please open the project workspace at '${newRoot}' manually.`));
+                GlobalEvent.show_msgbox('Info', `Please open the project workspace at '${newRoot}' manually.`);
             }
         } catch (error) {
             GlobalEvent.log_error(error);
-            GlobalEvent.emit('msg', newMessage('Error', `Relocate project root failed: ${(error as Error).message}`));
+            GlobalEvent.show_msgbox('Error', `Relocate project root failed: ${(error as Error).message}`);
         }
     }
 
@@ -3728,7 +3724,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const proj = this.getProjectByTreeItem(prjItem);
         if (proj == undefined) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'No activated project !'));
+            GlobalEvent.show_msgbox('Warning', 'No activated project !');
             return;
         }
 
@@ -3903,7 +3899,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
     private showTargetOperationError(error: any): void {
         const msg = error instanceof Error ? error.message : String(error);
-        GlobalEvent.emit('msg', newMessage('Error', msg));
+        GlobalEvent.show_msgbox('Error', msg);
     }
 
     private async pickTargetName(prj: AbstractProject, placeHolder: string, initialValue?: string, ignoreInitialValue?: boolean): Promise<string | undefined> {
@@ -3925,7 +3921,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const prj = this.resolveTargetOperationProject(prjItem);
         if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
 
@@ -3940,7 +3936,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         if (!targetName) { return; }
 
         // pick a clone source: all existing targets or an empty one
-        const items: vscode.QuickPickItem[] = manager.getNames().map((name) => ({
+        const items: vscode.QuickPickItem[] = this.sortedTargetNames(manager.getNames()).map((name) => ({
             label: name,
             description: name === prj.getCurrentTarget() ? 'current' : undefined
         }));
@@ -3967,7 +3963,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const prj = this.resolveTargetOperationProject(prjItem);
         if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
 
@@ -3978,7 +3974,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const manager = prj.getTargetManager();
 
-        const oldName = await vscode.window.showQuickPick(manager.getNames(), {
+        const oldName = await vscode.window.showQuickPick(this.sortedTargetNames(manager.getNames()), {
             placeHolder: 'Select a target to rename',
             ignoreFocusOut: true
         });
@@ -3998,7 +3994,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const prj = this.resolveTargetOperationProject(prjItem);
         if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
 
@@ -4009,7 +4005,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const manager = prj.getTargetManager();
 
-        const sourceName = await vscode.window.showQuickPick(manager.getNames(), {
+        const sourceName = await vscode.window.showQuickPick(this.sortedTargetNames(manager.getNames()), {
             placeHolder: 'Select a target to duplicate',
             ignoreFocusOut: true
         });
@@ -4034,11 +4030,21 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const prj = this.resolveTargetOperationProject(prjItem);
         if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
 
         await this.deleteTargetsIn(prj);
+    }
+
+    /**
+     * target 名展示排序:基础名 + 变体分组(A8, A8_A, A8_B, B7, B7_A, B7_B)。
+     * numeric:true 让数字后缀按数值比较(A8 < A10);ASCII 序兜底保证结果稳定。
+     */
+    private sortedTargetNames(names: string[]): string[] {
+        return [...names].sort((a, b) =>
+            a.localeCompare(b, undefined, { numeric: true }) ||
+            (a < b ? -1 : a > b ? 1 : 0));
     }
 
     private async deleteTargetsIn(prj: AbstractProject) {
@@ -4046,7 +4052,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const manager = prj.getTargetManager();
         const activeName = manager.getCurrentName();
 
-        const items: vscode.QuickPickItem[] = manager.getNames().map((name) => ({
+        const items: vscode.QuickPickItem[] = this.sortedTargetNames(manager.getNames()).map((name) => ({
             label: name,
             description: name === activeName ? vscode.l10n.t('$(lock) active') : undefined
         }));
@@ -4060,8 +4066,8 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const names = picked.map((item) => item.label).filter((name) => name !== activeName);
         if (names.length === 0) {
-            GlobalEvent.emit('msg', newMessage('Info',
-                vscode.l10n.t("The active target '{0}' cannot be deleted.", activeName || '')));
+            GlobalEvent.show_msgbox('Info',
+                vscode.l10n.t("The active target '{0}' cannot be deleted.", activeName || ''));
             return;
         }
 
@@ -4091,7 +4097,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             this.showTargetOperationError(new Error(failed.join('\n')));
         }
         if (deletedCount > 0) {
-            GlobalEvent.emit('msg', newMessage('Info', vscode.l10n.t('{0} target(s) deleted.', deletedCount)));
+            GlobalEvent.show_msgbox('Info', vscode.l10n.t('{0} target(s) deleted.', deletedCount));
         }
     }
 
@@ -4103,32 +4109,63 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         const prj = this.resolveTargetOperationProject(prjItem);
         if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
 
         try {
             const result = rebuildClangdCache(prj);
-            GlobalEvent.emit('msg', newMessage('Info',
+            GlobalEvent.show_msgbox('Info',
                 vscode.l10n.t("Clangd cache rebuilt for target '{0}': {1} files{2} !",
                     result.targetName, result.entries,
-                    result.cacheCleared ? '' : vscode.l10n.t(' (nothing cached)'))));
+                    result.cacheCleared ? '' : vscode.l10n.t(' (nothing cached)')));
         } catch (error) {
             this.showTargetOperationError(error);
         }
     }
 
+    /** Build All 防重入锁(统一走 OperationLock):运行期间全局锁死,避免并发触发互相干扰 */
+    private static readonly __buildAllTargetsLock = new OperationLock();
+
     /**
      * 构建所有 target:按顺序逐个切换并构建,单个失败只记账不中断,
      * 全部跑完后切回原 target 并汇总报告(✓/✗ 清单)。
+     * 全程在 `build-all:<project>` 状态终端输出高层进度
+     * (准备参数/启动/完成/失败),不输出编译过程。
+     * 运行期间重复触发直接拒绝(终端 + 通知提示)。
      */
     public async onBuildAllTargets(prjItem?: ProjTreeItem) {
 
         const prj = this.resolveTargetOperationProject(prjItem);
         if (!prj) {
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
+
+        // 防重入:上一轮还没跑完,直接拒绝
+        if (ProjectExplorer.__buildAllTargetsLock.isLocked(OpLockKeys.BuildAllTargets)) {
+            const busyStatus = BuildAllStatus.Get(prj.getProjectName());
+            busyStatus.Show();
+            busyStatus.Warn('Build all is already running, please wait !');
+            GlobalEvent.show_msgbox('Warning', `Build all is already running, please wait !`);
+            return;
+        }
+        ProjectExplorer.__buildAllTargetsLock.tryAcquire(OpLockKeys.BuildAllTargets);
+
+        try {
+            await this.runBuildAllTargets(prj);
+        } finally {
+            ProjectExplorer.__buildAllTargetsLock.release(OpLockKeys.BuildAllTargets);
+        }
+    }
+
+    /** onBuildAllTargets 主体(已持防重入锁) */
+    private async runBuildAllTargets(prj: AbstractProject) {
+
+        // 立即在状态终端宣告开工(点击后先有反馈),再进入 target 解析与参数准备
+        const status = BuildAllStatus.Get(prj.getProjectName());
+        status.Show();
+        status.Step('Build all starting ...');
 
         let names: string[] = [];
         try {
@@ -4138,47 +4175,208 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             return;
         }
         if (!names.length) {
-            GlobalEvent.emit('msg', newMessage('Info', `No targets to build !`));
+            status.Fail('No targets to build !');
+            GlobalEvent.show_msgbox('Info', `No targets to build !`);
             return;
         }
 
         const originalTarget = prj.getCurrentTarget();
         const results: BuildTargetResult[] = [];
 
+        const buildAllStart = Date.now();
+
+        // 与 clangd/cpptools 刷新解耦:Build All 期间连续切换 target,
+        // 每次切换原本都会触发 UpdateCppConfig 防抖刷新(生成编译库+唤醒 clangd),
+        // 中间 target 的刷新毫无意义;挂起,恢复激活态后统一补刷一次
+        prj.suspendCppConfigUpdate();
+
         try {
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: `Building all targets (${names.length})`,
-                cancellable: false
-            }, async (progress) => {
-                for (const name of names) {
-                    progress.report({ message: `Building '${name}' ...` });
-                    try {
-                        await prj.switchTarget(name);
-                        const res = await this.buildProject(prj, { notRebuild: true });
-                        results.push({ target: name, success: res.success, message: res.success ? undefined : res.message });
-                    } catch (error) {
-                        results.push({
-                            target: name,
-                            success: false,
-                            message: error instanceof Error ? error.message : String(error)
-                        });
-                    }
-                }
-            });
-        } finally {
+            if (SettingManager.GetInstance().isParallelBuildAll() && names.length > 1) {
+                await this.buildAllTargetsParallel(prj, names, results, status);
+            } else {
+                await this.buildAllTargetsSerial(prj, names, results, status);
+            }
+
+            // restore original active target whichever path taken
             try {
                 if (prj.getCurrentTarget() !== originalTarget) {
+                    status.Step(`restoring active target '${originalTarget}' ...`);
                     await prj.switchTarget(originalTarget);
                 }
             } catch (error) {
                 GlobalEvent.log_error(error);
             }
+        } finally {
+            // 恢复后补一次完整刷新(cpptools + 编译数据库 + clangd),只针对最终激活的 target
+            prj.resumeCppConfigUpdate(true);
+        }
+
+        // summary to terminal (per-target lines from formatBuildAllSummary)
+        const elapsedS = ((Date.now() - buildAllStart) / 1000).toFixed(1);
+        const summaryLines = formatBuildAllSummary(results).text.split('\n');
+        const headLine = `${summaryLines[0]} (elapsed ${elapsedS}s)`;
+        if (summaryLines[0] !== 'No targets to build.') {
+            if (results.some((r) => !r.success)) { status.Fail(headLine); }
+            else { status.Ok(headLine); }
+        }
+        for (const line of summaryLines.slice(1)) {
+            if (line.startsWith('✓')) { status.Ok(`  ${line}`); }
+            else if (line.startsWith('✗')) { status.Fail(`  ${line}`); }
         }
 
         const summary = formatBuildAllSummary(results);
         GlobalEvent.log_info(`--- Build all targets: ${prj.getProjectName()} ---\n${summary.text}`);
-        GlobalEvent.emit('msg', newMessage(summary.hasFailure ? 'Warning' : 'Info', summary.text));
+        GlobalEvent.show_msgbox(summary.hasFailure ? 'Warning' : 'Info', summary.text);
+    }
+
+    /** 原串行路径:逐个 switchTarget + buildProject(开关关闭/单 target 时使用) */
+    private async buildAllTargetsSerial(prj: AbstractProject, names: string[], results: BuildTargetResult[], status: BuildAllStatus) {
+        status.Header(`Build all targets: ${prj.getProjectName()} (${names.length} target(s), serial)`);
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Building all targets (${names.length})`,
+            cancellable: false
+        }, async (progress) => {
+            for (let i = 0; i < names.length; i++) {
+                const name = names[i];
+                progress.report({ message: `Building '${name}' ...` });
+                status.Step(`[${i + 1}/${names.length}] building '${name}' ...`);
+                const targetStart = Date.now();
+                try {
+                    await prj.switchTarget(name);
+                    const res = await this.buildProject(prj, { notRebuild: true });
+                    const targetElapsed = ((Date.now() - targetStart) / 1000).toFixed(1);
+                    results.push({ target: name, success: res.success, message: res.success ? undefined : res.message });
+                    if (res.success) {
+                        status.Ok(`✓ '${name}' done (${targetElapsed}s)`);
+                    } else {
+                        status.Fail(`✗ '${name}' failed (${targetElapsed}s)`);
+                        status.FailReason(res.message);
+                    }
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    results.push({
+                        target: name,
+                        success: false,
+                        message
+                    });
+                    status.Fail(`✗ '${name}' failed`);
+                    status.FailReason(message);
+                }
+            }
+        });
+    }
+
+    /**
+     * 并行路径(默认):三阶段构建所有 target。
+     * 1. 串行切换 target 并生成各 target 构建命令(写出各自 `build/<target>/builder.params`,互不覆盖)
+     * 2. worker pool 并发上限跑 Go builder(各 outDir 独立:obj/.lock/objs.db 无共享状态),
+     *    cap = min(target数, max(4, cores/2)),threadNum = cores/cap 均分保持 CPU 满载不过载
+     * 3. 恢复激活态后统一刷新 diagnostics/输出目录/状态栏
+     * 冷构建 N 个 target 时 wall time 约为串行的 1/N ~ 1/2(受 CPU 总核数约束)。
+     * 三阶段全程在状态终端输出进度。
+     */
+    private async buildAllTargetsParallel(prj: AbstractProject, names: string[], results: BuildTargetResult[], status: BuildAllStatus) {
+
+        const cores = os.cpus().length || 4;
+        // 真正的并发上限(worker pool):实测 51 target 齐发时上百编译线程过载,
+        // 尾部轻 target 挤到最后 1s 才冲线;cap 与核数挂钩,threadNum 相应放大保持 CPU 满载
+        const parallelism = Math.min(names.length, Math.max(4, Math.floor(cores / 2)));
+        const threadNum = Math.max(2, Math.floor(cores / parallelism));
+
+        status.Header(`Build all targets: ${prj.getProjectName()} (${names.length} targets, ${parallelism} parallel, ${threadNum} jobs each)`);
+
+        // ---- Phase 1: generate command line + params for each target ----
+        const jobs: { target: string, commandLine: string, index: number }[] = [];
+        for (let i = 0; i < names.length; i++) {
+            const name = names[i];
+            const index = results.length;
+            const prepareStart = Date.now();
+            status.Step(`[${i + 1}/${names.length}] preparing '${name}' (switch target + builder.params) ...`);
+            try {
+                await prj.switchTarget(name);
+                prj.Save(true);
+                const builder = CodeBuilder.NewBuilder(prj);
+                const commandLine = builder.genBuildCommand({
+                    notRebuild: true,
+                    threadNumOverride: threadNum
+                });
+                if (!commandLine) {
+                    throw new Error('generate build command failed');
+                }
+                jobs.push({ target: name, commandLine, index });
+                results.push({ target: name, success: false, message: 'building...' }); // placeholder
+                status.Ok(`[${i + 1}/${names.length}] '${name}' ready (${((Date.now() - prepareStart) / 1000).toFixed(1)}s)`);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                results.push({
+                    target: name,
+                    success: false,
+                    message
+                });
+                status.Fail(`[${i + 1}/${names.length}] '${name}' prepare failed`);
+                status.FailReason(message);
+            }
+        }
+
+        if (!jobs.length) { return; }
+
+        const startTime = Date.now();
+        const cwd = prj.getProjectRoot().path;
+        let finished = 0;
+
+        // ---- Phase 2: launch builders via worker pool (concurrency capped) ----
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Building all targets (${jobs.length} targets, ${parallelism} parallel, ${threadNum} jobs each)`,
+            cancellable: false
+        }, async (progress) => {
+            const runJob = (job: { target: string, commandLine: string, index: number }) => new Promise<void>((resolve) => {
+                status.Step(`building '${job.target}' ...`);
+                const jobStart = Date.now();
+                child_process.exec(job.commandLine, {
+                    cwd: cwd,
+                    env: process.env,
+                    maxBuffer: 64 * 1024 * 1024
+                }, (error, stdout) => {
+                    finished++;
+                    progress.report({ message: `'${job.target}' done (${finished}/${jobs.length})` });
+                    const jobElapsed = ((Date.now() - jobStart) / 1000).toFixed(1);
+                    if (error) {
+                        results[job.index] = {
+                            target: job.target,
+                            success: false,
+                            message: `Failed.\n${stdout.toString().slice(-4000)}`
+                        };
+                        status.Fail(`✗ '${job.target}' failed (${jobElapsed}s)`);
+                        status.ErrorExcerpt(stdout.toString());
+                    } else {
+                        results[job.index] = { target: job.target, success: true };
+                        status.Ok(`✓ '${job.target}' built (${jobElapsed}s)`);
+                    }
+                    resolve();
+                });
+            });
+
+            // cap 个 worker 依次从队列取 target,完成一个补一个,批间无空转
+            let nextJob = 0;
+            const worker = async () => {
+                while (nextJob < jobs.length) {
+                    await runJob(jobs[nextJob++]);
+                }
+            };
+            await Promise.all(Array.from({ length: parallelism }, () => worker()));
+        });
+
+        GlobalEvent.log_info(`Build all targets: ${jobs.length} targets in parallel,` +
+            ` elapsed ${(Date.now() - startTime) / 1000}s`);
+
+        // ---- Phase 3: refresh project states once ----
+        prj.notifyUpdateSourceRefs(prj.getToolchain().name);
+        this.notifyUpdateOutputFolder(prj);
+        this.updateCompilerDiagsAfterBuild(prj);
+        this.dataProvider.updateStatusBarForActiveProjects();
+        hooks.onProjectBuildFinished(prj, results.every((r) => r.success));
     }
 
     switchTarget(prjItem?: ProjTreeItem) {
@@ -4187,7 +4385,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             ? this.dataProvider.GetProjectByIndex(prjItem.val.projectIndex)
             : this.getActiveProject();
         if (!prj) { // not active project
-            GlobalEvent.emit('msg', newMessage('Info', `No active project !`));
+            GlobalEvent.show_msgbox('Info', `No active project !`);
             return;
         }
 
@@ -4195,7 +4393,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const pickBox = vscode.window.createQuickPick();
         pickBox.title = view_str$project$sel_target;
         pickBox.placeholder = view_str$project$sel_target;
-        pickBox.items = prj.getTargets().map<vscode.QuickPickItem>((name: string) => { return { label: name }; });
+        pickBox.items = this.sortedTargetNames(prj.getTargets()).map<vscode.QuickPickItem>((name: string) => { return { label: name }; });
         pickBox.buttons = [
             {
                 iconPath: {
@@ -4323,14 +4521,15 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const prj = this.getProjectByTreeItem(prjItem);
 
         if (prj === undefined) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'No active project !'));
+            GlobalEvent.show_msgbox('Warning', 'No active project !');
             return;
         }
 
         prj.Save();
     }
 
-    private _builderLock: boolean = false;
+    /** 统一的操作互斥锁: 取代原先 6 处各自为政的布尔标志(_builderLock/_uploadLock/installLocked/exportLocked/install_lock) */
+    private readonly _opLock = new OperationLock();
     async buildProject(prj?: AbstractProject, options?: BuildOptions, noTerminal?: boolean): Promise<{ success: boolean; message: string; }> {
 
         if (prj === undefined) {
@@ -4341,7 +4540,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             };
         }
 
-        if (this._builderLock) {
+        if (this._opLock.isLocked(OpLockKeys.Build)) {
             GlobalEvent.show_msgbox('Warning', 'Builder busy ! Please wait !');
             return {
                 success: false,
@@ -4350,10 +4549,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         }
 
         try {
-            this._builderLock = true;
-
-            // .NET runtime (for unify_builder) is checked once per session, on first build
-            try { await require('./extension').ensureDotnetRuntime(); } catch { /* logged inside */ }
+            this._opLock.tryAcquire(OpLockKeys.Build);
 
             // save project before build
             prj.Save(true);
@@ -4434,15 +4630,15 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                     // start build
                     builder.build(options);
 
-                    this._builderLock = false;
+                    this._opLock.release(OpLockKeys.Build);
                 }
             });
 
-            this._builderLock = false;
+            this._opLock.release(OpLockKeys.Build);
             return res;
 
         } catch (error) {
-            this._builderLock = false;
+            this._opLock.release(OpLockKeys.Build);
             GlobalEvent.emit('error', error);
             return {
                 success: false,
@@ -4588,7 +4784,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
     buildWorkspace(rebuild?: boolean) {
 
         if (this.dataProvider.getProjectCount() == 0) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'No project is opened !'));
+            GlobalEvent.show_msgbox('Warning', 'No project is opened !');
             return;
         }
 
@@ -4653,9 +4849,14 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const paramsFile = File.fromArray([os.tmpdir(), `eide-ws-params.tmp`]);
         paramsFile.Write(JSON.stringify(cmdList));
 
-        /* launch */
-        const commandLine = generateDotnetProgramCmd(
-            ResManager.instance().getUnifyBuilderExe(), ['-r', paramsFile.path]);
+        /* launch: Go 版构建器的 -r 命令运行器模式(原生 exe,直接调用) */
+        const goBuilderExe = ResManager.instance().getGoUnifyBuilderExe();
+        if (!goBuilderExe.IsFile()) {
+            GlobalEvent.show_msgbox('Error',
+                `unify_builder-go not found: ${goBuilderExe.path} (extension res damaged, please reinstall)`);
+            return;
+        }
+        const commandLine = CmdLineHandler.getCommandLine(goBuilderExe.path, ['-r', paramsFile.path]);
         sendCommandToTerminal('build workspace', commandLine);
     }
 
@@ -4666,7 +4867,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             const uri = vscode.Uri.parse(wsFile.ToUri());
             vscode.window.showTextDocument(uri, { preview: true });
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -4734,7 +4935,6 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         });
     }
 
-    private _uploadLock: boolean = false;
     async programFlashProject(prj?: AbstractProject, eraseAll?: boolean, noTerminal?: boolean): Promise<FlashCommandResult | void> {
 
         if (prj === undefined) {
@@ -4745,7 +4945,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             }
         }
 
-        if (this._uploadLock) {
+        if (this._opLock.isLocked(OpLockKeys.Upload)) {
             GlobalEvent.show_msgbox('Warning', 'Busy ! Please wait.');
             return {
                 success: false,
@@ -4753,7 +4953,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             }
         }
 
-        this._uploadLock = true;
+        this._opLock.tryAcquire(OpLockKeys.Upload);
 
         let result: FlashCommandResult | void;
         try {
@@ -4770,7 +4970,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             };
         }
 
-        this._uploadLock = false;
+        this._opLock.release(OpLockKeys.Upload);
 
         return result;
     }
@@ -4795,7 +4995,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 throw Error(`No compile commands for this file: ${srcPath}`);
             }
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -4813,7 +5013,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
             // limit toolchain
             if (!matchList.includes(prj.getToolchain().name)) {
-                GlobalEvent.emit('msg', newMessage('Warning', `Not support for toolchain '${prj.getToolchain().name}' !`));
+                GlobalEvent.show_msgbox('Warning', `Not support for toolchain '${prj.getToolchain().name}' !`);
                 return;
             }
 
@@ -4832,55 +5032,42 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             const saveDrive = NodePath.parse(uri.fsPath).root.toLowerCase();
             const prjDrive = NodePath.parse(prj.GetRootDir().path).root.toLowerCase();
             if (saveDrive !== prjDrive) {
-                GlobalEvent.emit('msg', newMessage('Warning', view_str$keil_export_path_warning
+                GlobalEvent.show_msgbox('Warning', view_str$keil_export_path_warning
                     .replace('{0}', saveDrive)
-                    .replace('{1}', prjDrive)));
+                    .replace('{1}', prjDrive));
             }
 
             const xmlFile = prj.ExportToKeilProject(new File(uri.fsPath));
 
             if (xmlFile) {
-                GlobalEvent.emit('msg', newMessage('Info', export_keil_xml_ok + prj.toRelativePath(xmlFile.path)));
+                GlobalEvent.show_msgbox('Info', export_keil_xml_ok + prj.toRelativePath(xmlFile.path));
             } else {
-                GlobalEvent.emit('msg', newMessage('Warning', export_keil_xml_failed));
+                GlobalEvent.show_msgbox('Warning', export_keil_xml_failed);
             }
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
-    private installLocked: boolean = false;
     InstallKeilPackage(prjIndex: number) {
 
-        if (this.installLocked) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'Busy !, Please wait for the current operation to complete !'
-            });
+        if (this._opLock.isLocked(OpLockKeys.InstallPackage)) {
+            GlobalEvent.show_msgbox('Warning', 'Busy !, Please wait for the current operation to complete !');
             return;
         }
 
-        this.installLocked = true;
+        this._opLock.tryAcquire(OpLockKeys.InstallPackage);
         const prj = this.dataProvider.GetProjectByIndex(prjIndex);
 
         if (prj.GetConfiguration().config.type !== 'ARM') { // only for ARM project
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: not_support_no_arm_project
-            });
-            this.installLocked = false;
+            GlobalEvent.show_msgbox('Warning', not_support_no_arm_project);
+            this._opLock.release(OpLockKeys.InstallPackage);
             return;
         }
 
         if (prj.GetPackManager().GetPack()) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'You should uninstall old package before install a new one !'
-            });
-            this.installLocked = false;
+            GlobalEvent.show_msgbox('Warning', 'You should uninstall old package before install a new one !');
+            this._opLock.release(OpLockKeys.InstallPackage);
             return;
         }
 
@@ -4891,7 +5078,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             return new Promise(async (resolve_) => {
 
                 const resolve = () => {
-                    this.installLocked = false;
+                    this._opLock.release(OpLockKeys.InstallPackage);
                     resolve_();
                 };
 
@@ -4934,7 +5121,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                         }
 
                         if (res instanceof Error) {
-                            GlobalEvent.emit('msg', ExceptionToMessage(res, 'Warning'));
+                            GlobalEvent.show_msgbox('Warning', res);
                             resolve();
                             return;
                         }
@@ -4972,7 +5159,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                     resolve();
 
                 } catch (error) {
-                    GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                    GlobalEvent.show_msgbox('Warning', error);
                     resolve();
                 }
             });
@@ -5075,11 +5262,11 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const prj = this.getProjectByTreeItem(prjItem);
 
         if (prj === undefined) {
-            GlobalEvent.emit('msg', newMessage('Error', 'No active project !'));
+            GlobalEvent.show_msgbox('Error', 'No active project !');
             return;
         }
-        if (this._builderLock) {
-            GlobalEvent.emit('msg', newMessage('Error', 'builder busy !, please wait !'));
+        if (this._opLock.isLocked(OpLockKeys.Build)) {
+            GlobalEvent.show_msgbox('Error', 'builder busy !, please wait !');
             return;
         }
 
@@ -5088,7 +5275,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const builder = CodeBuilder.NewBuilder(prj);
         const cmdLine = builder.genBuildCommand({ otherArgs: ['--out-makefile', '--dry-run'] });
         if (cmdLine === undefined) {
-            GlobalEvent.emit('msg', newMessage('Error', `Fail to generate build command`));
+            GlobalEvent.show_msgbox('Error', `Fail to generate build command`);
             return;
         }
 
@@ -5115,7 +5302,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                         setTimeout(() => resolve(true), 1000);
                     } else {
                         resolve(false);
-                        GlobalEvent.emit('msg', newMessage('Error', `Fail to export Makefile, code=${exitInfo.code}`));
+                        GlobalEvent.show_msgbox('Error', `Fail to export Makefile, code=${exitInfo.code}`);
                         if (errLines.length > 0) {
                             GlobalEvent.log_warn(errLines.slice(-100).join(os.EOL));
                         }
@@ -5123,7 +5310,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 });
                 cancel?.onCancellationRequested(_ => {
                     if (!kill(<number>proc.pid())) {
-                        GlobalEvent.emit('msg', newMessage('Error', `Can not kill process: ${proc.pid()} !`));
+                        GlobalEvent.show_msgbox('Error', `Can not kill process: ${proc.pid()} !`);
                     }
                 });
                 proc.Run(<string>cmdLine, undefined, { cwd: prj.getProjectRoot().path });
@@ -5131,19 +5318,14 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         });
     }
 
-    private exportLocked: boolean = false;
     async ExportProjectTemplate(prjItem?: ProjTreeItem, isWorkspace?: boolean) {
 
-        if (this.exportLocked) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'Busy, please try again later !'
-            });
+        if (this._opLock.isLocked(OpLockKeys.Export)) {
+            GlobalEvent.show_msgbox('Warning', 'Busy, please try again later !');
             return;
         }
 
-        this.exportLocked = true;
+        this._opLock.tryAcquire(OpLockKeys.Export);
 
         try {
             let templateName = isWorkspace ? WorkspaceManager.getInstance().getWorkspaceRoot()?.name : undefined;
@@ -5176,7 +5358,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
             /* invalid root folder, exit */
             if (rootDir == undefined) {
-                this.exportLocked = false;
+                this._opLock.release(OpLockKeys.Export);
                 return;
             }
 
@@ -5208,7 +5390,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
                     const err = await compresser.Zip(prjRootDir, option, distDir);
                     if (err) {
-                        GlobalEvent.emit('msg', ExceptionToMessage(err, 'Warning'));
+                        GlobalEvent.show_msgbox('Warning', err);
                     } else {
                         progress.report({ message: 'export done !' });
                     }
@@ -5222,10 +5404,10 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             }
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
 
-        this.exportLocked = false;
+        this._opLock.release(OpLockKeys.Export);
     }
 
     async ShowProjectVariables(item: ProjTreeItem) {
@@ -5486,7 +5668,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 const filePath = folderPath + File.sep + fName;
                 if (!File.IsFile(filePath)) { fs.writeFileSync(filePath, ''); }
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                GlobalEvent.show_msgbox('Warning', error);
             }
         }
     }
@@ -5504,7 +5686,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             try {
                 fs.mkdirSync(folderPath + File.sep + folderName);
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                GlobalEvent.show_msgbox('Warning', error);
             }
         }
     }
@@ -6138,7 +6320,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             });
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -6305,7 +6487,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             });
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -6313,15 +6495,14 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         WebPanelManager.instance().showCmsisConfigWizard(uri);
     }
 
-    private install_lock: boolean = false;
     async installCmsisSourcePack(item: ProjTreeItem, type: 'header' | 'lib' | 'idrv') {
 
-        if (this.install_lock) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'Operation is in pending !'));
+        if (this._opLock.isLocked(OpLockKeys.InstallPackage)) {
+            GlobalEvent.show_msgbox('Warning', 'Operation is in pending !');
             return;
         }
 
-        this.install_lock = true; // lock op
+        this._opLock.tryAcquire(OpLockKeys.InstallPackage); // lock op
 
         try {
 
@@ -6352,10 +6533,10 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             }
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
 
-        this.install_lock = false; // unlock op
+        this._opLock.release(OpLockKeys.InstallPackage); // unlock op
     }
 
     setActiveProject(item: ProjTreeItem) {
@@ -6364,8 +6545,8 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
     async UninstallKeilPackage(item: ProjTreeItem) {
 
-        if (this.installLocked) {
-            GlobalEvent.emit('msg', newMessage('Warning', `Busy !, Please wait for the current operation to complete !`));
+        if (this._opLock.isLocked(OpLockKeys.InstallPackage)) {
+            GlobalEvent.show_msgbox('Warning', `Busy !, Please wait for the current operation to complete !`);
             return;
         }
 
@@ -6376,15 +6557,15 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         try {
             if (result === 'Yes') {
-                this.installLocked = true;
+                this._opLock.tryAcquire(OpLockKeys.InstallPackage);
                 await this.dataProvider.UninstallKeilPackage(item);
-                GlobalEvent.emit('msg', newMessage('Info', `package '${<string>item.val.value}' has been uninstalled`));
+                GlobalEvent.show_msgbox('Info', `package '${<string>item.val.value}' has been uninstalled`);
             }
         } catch (error) {
             GlobalEvent.emit('error', error);
         }
 
-        this.installLocked = false;
+        this._opLock.release(OpLockKeys.InstallPackage);
     }
 
     SetDevice(prjIndex: number) {
@@ -6753,7 +6934,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 .map(path => prj.ToRelativePath(path) || path);
             if (dupLi.length > 0) {
                 const msg = `${dupLi.length} redundant include paths (ignored): ${JSON.stringify(dupLi)}`;
-                GlobalEvent.emit('msg', newMessage('Warning', msg));
+                GlobalEvent.show_msgbox('Warning', msg);
             }
         }
     }
@@ -7125,7 +7306,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const defFileName = `${prj.getUid()}.eide.${id}.yaml`;
         const res = await provider.provideYamlDocument(prj, item, defFileName);
         if (res instanceof Error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(res, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', res);
             return;
         }
 
@@ -7225,12 +7406,8 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         try {
             prj.InstallComponent(<string>item.val.value);
         } catch (err) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: view_str$pack$install_component_failed
-            });
-            GlobalEvent.emit('msg', ExceptionToMessage(err, 'Hidden'));
+            GlobalEvent.show_msgbox('Warning', view_str$pack$install_component_failed);
+            GlobalEvent.show_msgbox('Hidden', err);
         }
     }
 
@@ -7239,12 +7416,8 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         try {
             prj.UninstallComponent(<string>item.val.value);
         } catch (err) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: view_str$pack$remove_component_failed
-            });
-            GlobalEvent.emit('msg', ExceptionToMessage(err, 'Hidden'));
+            GlobalEvent.show_msgbox('Warning', view_str$pack$remove_component_failed);
+            GlobalEvent.show_msgbox('Hidden', err);
         }
     }
 
@@ -7531,7 +7704,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 project.GetConfiguration().uploadConfigModel.SetKeyValue('commandLine', tarFlasher.flashConfigTemplate.commandLine);
                 project.GetConfiguration().uploadConfigModel.SetKeyValue('eraseChipCommand', tarFlasher.flashConfigTemplate.eraseChipCommand);
 
-                GlobalEvent.emit('msg', newMessage('Info', `Shell flasher '${tarFlasher.id}' has been setup !`));
+                GlobalEvent.show_msgbox('Info', `Shell flasher '${tarFlasher.id}' has been setup !`);
                 if (needReload) {
                     notifyReloadWindow(view_str$prompt$needReloadToUpdateEnv);
                 }
@@ -7544,7 +7717,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         });
 
         if (err) {
-            GlobalEvent.emit('msg', ExceptionToMessage(err, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', err);
         }
     }
 
@@ -8009,7 +8182,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 }
 
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                GlobalEvent.show_msgbox('Warning', error);
             }
         }
     }
@@ -8114,7 +8287,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             }
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
         }
     }
 }
@@ -8256,7 +8429,7 @@ class VFolderSourcePathsModifier implements ModifiableYamlConfigProvider {
             vSrcManger.notifyUpdateFolder(info.vFolderPath);
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -8271,7 +8444,7 @@ class VFolderSourcePathsModifier implements ModifiableYamlConfigProvider {
             this.prjFolderSourceChangesMap.delete(fileName); // remove from mapper
             fs.unlinkSync(`${os.tmpdir()}/${fileName}`);
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
         }
     }
 
@@ -8417,7 +8590,7 @@ class ProjectAttrModifier implements ModifiableYamlConfigProvider {
             prj.GetConfiguration().CustomDep_NotifyChanged();
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -8432,7 +8605,7 @@ class ProjectAttrModifier implements ModifiableYamlConfigProvider {
             this.prjCusDepChangesMap.delete(tmpFileName); // remove from mapper
             fs.unlinkSync(`${os.tmpdir()}/${tmpFileName}`);
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
         }
     }
 
@@ -8556,7 +8729,7 @@ class ProjectExcSourceModifier implements ModifiableYamlConfigProvider {
             needUpdateLi.forEach(dir => 
                 prj.getNormalSourceManager().notifyUpdateFolder(prj.ToAbsolutePath(dir)));
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -8570,7 +8743,7 @@ class ProjectExcSourceModifier implements ModifiableYamlConfigProvider {
             this.yamlFilesMap.delete(fileName);
             fs.unlinkSync(`${os.tmpdir()}/${fileName}`);
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
         }
     }
 

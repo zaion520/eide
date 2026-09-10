@@ -38,6 +38,7 @@ import {
 
 import { File } from '../lib/node-utility/File';
 import { FileWatcher } from '../lib/node-utility/FileWatcher';
+import { RefreshStateMachine, RefreshState } from './RefreshStateMachine';
 import { TargetManager, TargetManagerHost, TargetEventType, TargetSnapshotContext, TargetRestoreContext, TargetSwitchResult } from './TargetManager';
 import { getTargetLibsFileName, getTargetOptionBytesFileName, removeIniSection, renameIniSection, copyIniSection } from './TargetSidecars';
 import { updateClangdIntegration } from './clangdIntegration';
@@ -1500,7 +1501,7 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
                 try {
                     this.dependenceManager.InstallComponent(device.packInfo.name, component);
                 } catch (error) {
-                    GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                    GlobalEvent.show_msgbox('Warning', error);
                 }
             }
         }
@@ -1946,7 +1947,7 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
         }
 
         if (doneList.length > 0) {
-            GlobalEvent.emit('msg', newMessage('Info', `Installation completed !, [path list]: ${doneList.join(', ')}`));
+            GlobalEvent.show_msgbox('Info', `Installation completed !, [path list]: ${doneList.join(', ')}`);
         }
     }
 
@@ -1954,7 +1955,7 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
 
         const packs = ResManager.GetInstance().getCmsisLibPacks();
         if (Object.keys(packs).length == 0) {
-            GlobalEvent.emit('msg', newMessage('Info', 'Not found available libraries !'));
+            GlobalEvent.show_msgbox('Info', 'Not found available libraries !');
             return;
         }
 
@@ -2049,7 +2050,7 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
         }
 
         if (doneList.length > 0) {
-            GlobalEvent.emit('msg', newMessage('Info', `Installation completed !, [path list]: ${doneList.join(', ')}`));
+            GlobalEvent.show_msgbox('Info', `Installation completed !, [path list]: ${doneList.join(', ')}`);
         }
     }
 
@@ -2104,7 +2105,7 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
         try {
             cfg = yaml.parse(fcfg.Read());
         } catch (error) {
-            GlobalEvent.emit('msg', newMessage('Warning', `Parse '${fcfg.name}' failed !`));
+            GlobalEvent.show_msgbox('Warning', `Parse '${fcfg.name}' failed !`);
             GlobalEvent.log_error(error);
             GlobalEvent.emit('globalLog.show');
             return undefined;
@@ -3127,7 +3128,7 @@ $(OUT_DIR):
         this.registerBuiltinVar('SYS_EOL', () => os.EOL);
 
         // eide vars
-        this.registerBuiltinVar('EIDE_BUILDER_DIR', () => ResManager.instance().getUnifyBuilderExe().dir);
+        this.registerBuiltinVar('EIDE_BUILDER_DIR', () => ResManager.instance().getGoUnifyBuilderExe().dir);
         for (const key in process.env) {
             if (key.startsWith('EIDE_') && !key.startsWith('EIDE_TOOL_')) {
                 this.registerBuiltinVar(key, () => process.env[key] || '');
@@ -3370,7 +3371,7 @@ $(OUT_DIR):
             this.eideDirWatcher?.Watch();
         } catch (error) {
             GlobalEvent.log_error(<Error>error);
-            GlobalEvent.emit('msg', newMessage('Error', `Cannot watch '.eide' folder, some functions will not available !`));
+            GlobalEvent.show_msgbox('Error', `Cannot watch '.eide' folder, some functions will not available !`);
         }
 
         // force flush toolchain dependence
@@ -3414,7 +3415,7 @@ $(OUT_DIR):
                 }
                 break;
             default:
-                GlobalEvent.emit('msg', newMessage('Warning', 'Invalid event \'' + eventData.event + '\''));
+                GlobalEvent.show_msgbox('Warning', 'Invalid event \'' + eventData.event + '\'');
                 break;
         }
     }
@@ -3571,6 +3572,43 @@ $(OUT_DIR):
     public abstract getSourceRefs(file: File): File[];
 
     public abstract getCpptoolsConfig(): CppConfigItem;
+
+    //-----------------------------------------------------------
+
+    /**
+     * 挂起刷新管线(cpptools/编译数据库/clangd 三连刷)。
+     * 供 Build All 等批量操作使用:期间会连续切换 target,每次切换原本都会
+     * 触发一次完整的 clangd 集成刷新(生成编译库+唤醒 clangd),既慢又无意义;
+     * 挂起后请求只记账(dirty),恢复时统一补刷一次即可。
+     */
+    public suspendCppConfigUpdate(): void {
+        this.__refresh.suspend();
+    }
+
+    /** 恢复刷新管线;flush=true 时立即补一次完整刷新(用当前激活 target 的配置) */
+    public resumeCppConfigUpdate(flush: boolean = false): void {
+        this.__refresh.resume(flush);
+    }
+
+    public abstract UpdateCppConfig(): void;
+
+    /** 当前刷新状态(供调试/可观测) */
+    public getCppConfigRefreshState(): RefreshState {
+        return this.__refresh.state;
+    }
+
+    /**
+     * 刷新状态机(替代原先"尾缘防抖 + __cpptools_updateTimeout 兼作状态标志"的写法)。
+     * 它负责:合并连续请求、执行期间只置 dirty 而不并发开链(D2)、
+     * 以及用世代号彻底杜绝过期计时器回调(D1)。
+     */
+    protected readonly __refresh: RefreshStateMachine = new RefreshStateMachine({
+        run: () => this.runCppConfigRefresh(),
+        onError: (err) => GlobalEvent.show_msgbox('Hidden', err instanceof Error ? err : String(err))
+    });
+
+    /** 三连刷的实际动作;由子类实现(状态机在合适的时机调用它) */
+    protected abstract runCppConfigRefresh(): Promise<void> | void;
 
     //-----------------------------------------------------------
 
@@ -3766,7 +3804,8 @@ class EIDEProject extends AbstractProject {
 
     private onSrcExtraOptionsChanged(evt: 'changed' | 'renamed') {
         this.srcExtraCompilerConfig = this.getSourceExtraArgsCfg();
-        this.emit('cppConfigChanged');
+        // 此处不再 emit('cppConfigChanged')：该事件在 doUpdateCpptoolsConfig 末尾(:4702)已发一次,
+        // 而这里的 emit 时机在参数重算之前, 会让 cpptools 拿着旧配置重查一遍 —— 属重复通知。
         // per-file 编译参数同时参与编译数据库与 clangd 配置,
         // 触发完整的防抖更新,避免 compile_commands.json 与智能感知配置脱节
         this.UpdateCppConfig();
@@ -4266,7 +4305,7 @@ class EIDEProject extends AbstractProject {
                     }, undefined, 4));
                 }
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', error);
             }
 
             // // gen default 'settings.json'
@@ -4441,8 +4480,6 @@ class EIDEProject extends AbstractProject {
         defines: []
     };
 
-    private __cpptools_updateTimeout: NodeJS.Timeout | undefined;
-
     getCpptoolsConfig(): CppConfigItem {
         return <CppConfigItem>deepCloneObject(this.cppToolsConfig);
     }
@@ -4451,26 +4488,22 @@ class EIDEProject extends AbstractProject {
         this.UpdateCppConfig();
     }
 
+    /** 请求一次智能感知配置刷新(合并/调度交给状态机, 此处不再自行管理计时器) */
     UpdateCppConfig() {
+        this.__refresh.request('debounce');
+    }
 
-        // if updater not in running, create it
-        if (this.__cpptools_updateTimeout == undefined) {
-            this.__cpptools_updateTimeout =
-                setTimeout(() => {
-                    try {
-                        this.doUpdateCpptoolsConfig();
-                        this.doUpdateCompilerDatabase();
-                        this.doUpdateClangdSupport();
-                    } catch (error) {
-                        GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
-                    }
-                }, 1000);
-        }
-
-        // we already have a updater in running, now delay it
-        else {
-            this.__cpptools_updateTimeout.refresh();
-        }
+    /**
+     * 三连刷: cpptools 配置 → 编译数据库 → clangd 集成。
+     *
+     * `doUpdateCompilerDatabase` 必须 await —— 它返回 Promise 但此前被丢弃,
+     * 导致状态机无法判定本轮何时结束、执行期间的新请求会另开一条链并与仍在运行的
+     * 构建器并发写同一份 `builder.params` / compile_commands(D2)。
+     */
+    protected async runCppConfigRefresh(): Promise<void> {
+        this.doUpdateCpptoolsConfig();
+        await this.doUpdateCompilerDatabase();
+        this.doUpdateClangdSupport();
     }
 
     /**
@@ -4672,10 +4705,6 @@ class EIDEProject extends AbstractProject {
 
         // notify config changed
         this.emit('cppConfigChanged');
-        console.log(this.cppToolsConfig);
-
-        // clear timeout obj
-        this.__cpptools_updateTimeout = undefined;
     }
 
     canProvideConfiguration(uri: vscode.Uri, token?: vscode.CancellationToken | undefined): Thenable<boolean> {

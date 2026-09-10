@@ -156,12 +156,34 @@ export class ResManager extends events.EventEmitter {
             || /cmd.exe$/i.test(vscode.env.shell);
     }
 
+    /**
+     * 枚举系统串口(系统原生实现,零外部依赖):
+     * - Windows: reg query 读 HARDWARE\DEVICEMAP\SERIALCOMM(reg.exe 输出为 UTF-16LE)
+     * - Linux:   枚举 /dev 下的 ttyUSB/ttyACM/ttyS/ttyO/rfcomm
+     * - macOS:   枚举 /dev 下的 cu.(usbserial|usbmodem|*)
+     * (替代原 serial_monitor.exe —— 最后一个 .NET 工具,已随完整构建 Go 化一并移除)
+     */
     enumSerialPort(): string[] {
         try {
-            const cmd = utility.generateDotnetProgramCmd(this.getSerialPortExe());
-            const data = ChildProcess.execSync(cmd, { env: process.env });
-            const portList: string[] = JSON.parse(EncodingConverter.trimUtf8BomHeader(data));
-            if (!Array.isArray(portList)) { throw Error("get current port list error !"); }
+            let portList: string[] = [];
+            if (os.platform() === 'win32') {
+                const data = ChildProcess.execSync(
+                    'reg query HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM',
+                    { encoding: 'utf16le', stdio: ['ignore', 'pipe', 'ignore'] });
+                const found = data.match(/COM\d+/g) || [];
+                portList = [...new Set(found)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            } else if (os.platform() === 'darwin') {
+                portList = fs.readdirSync('/dev')
+                    .filter(name => /^cu\./.test(name))
+                    .filter(name => /usb|modem|serial|wch|slab|bluetooth/i.test(name))
+                    .sort()
+                    .map(name => `/dev/${name}`);
+            } else {
+                portList = fs.readdirSync('/dev')
+                    .filter(name => /^(ttyUSB|ttyACM|ttyO|ttyHS|rfcomm)/.test(name))
+                    .sort()
+                    .map(name => `/dev/${name}`);
+            }
             return portList;
         } catch (error) {
             throw Error(`enum serialport error !, msg: ${(<Error>error).message}`);
@@ -213,7 +235,7 @@ export class ResManager extends events.EventEmitter {
             try {
                 this.appConfig = yaml.parse(cfgFile.Read());
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', error);
             }
         }
     }
@@ -312,7 +334,7 @@ export class ResManager extends events.EventEmitter {
                 }
             }
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(<Error>error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', <Error>error);
         }
         return undefined;
     }
@@ -445,23 +467,12 @@ export class ResManager extends events.EventEmitter {
         }
     }
 
-    getUnifyBuilderExe(): File {
-        let dirname = 'unify_builder';
-        if (osType() == 'darwin')
-            dirname += File.sep + getArchId();
-        return File.fromArray([this.getBuiltInToolsDir().path, dirname, `unify_builder${exeSuffix()}`]);
-    }
-
-    /** Go 版构建器(编译数据库模式已与 C# 原版逐字节对拍验收);单文件原生程序,无 dotnet 依赖 */
+    /** Go 版构建器(全场景:完整构建 + 编译数据库 + -r 命令运行,均与 C# 原版对拍验收);单文件原生程序,无 dotnet 依赖 */
     getGoUnifyBuilderExe(): File {
         let dirname = 'unify_builder-go';
         if (osType() == 'darwin')
             dirname += File.sep + getArchId();
         return File.fromArray([this.getBuiltInToolsDir().path, dirname, `unify_builder${exeSuffix()}`]);
-    }
-
-    getSerialPortExe(): File {
-        return File.fromArray([this.getUnifyBuilderExe().dir, `serial_monitor${exeSuffix()}`]);
     }
 
     getBuilderModelsDir(): File {
@@ -603,7 +614,7 @@ export class ResManager extends events.EventEmitter {
             return loadDone;
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+            GlobalEvent.show_msgbox('Warning', error);
         }
     }
 
@@ -707,7 +718,7 @@ export class ResManager extends events.EventEmitter {
             this.stm8DevList = arr;
             return true;
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
         }
 
         // load default dev list
@@ -718,7 +729,7 @@ export class ResManager extends events.EventEmitter {
             this.stm8DevList = list.map((dev) => { return dev.trim(); });
             return true; // done, exit
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
         }
     }
 

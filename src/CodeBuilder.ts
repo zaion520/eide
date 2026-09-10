@@ -51,7 +51,7 @@ import { DependenceManager } from "./DependenceManager";
 import { WorkspaceManager } from "./WorkspaceManager";
 import { ToolchainName } from "./ToolchainManager";
 import {
-    md5, sha256, copyObject, generateDotnetProgramCmd, generateRandomStr,
+    md5, sha256, copyObject, generateRandomStr,
     isGccFamilyToolchain, compareVersion 
 } from "./utility";
 import { exeSuffix, osType } from "./Platform";
@@ -71,6 +71,9 @@ export interface BuildOptions {
     onlyDumpBuilderParams?: boolean;
 
     otherArgs?: string[];
+
+    /** 覆盖 builder.params 的 threadNum(Build All 多 target 并行时按 CPU 核数均分,避免超载) */
+    threadNumOverride?: number;
 }
 
 export interface BuilderParams {
@@ -114,6 +117,7 @@ export abstract class CodeBuilder {
     protected useFastCompile?: boolean;
     protected onlyDumpCompilerInfo?: boolean;
     protected otherArgs?: string[];
+    protected threadNumOverride?: number;
     protected _event: events.EventEmitter;
     protected lockWatcher: FileWatcher | undefined;
 
@@ -194,8 +198,8 @@ export abstract class CodeBuilder {
             }
 
         } catch (err) {
-            GlobalEvent.emit('msg', ExceptionToMessage(err, 'Hidden'));
-            GlobalEvent.emit('msg', newMessage('Warning', `Append files options failed !, msg: ${err.message || ''}`));
+            GlobalEvent.show_msgbox('Hidden', err);
+            GlobalEvent.show_msgbox('Warning', `Append files options failed !, msg: ${err.message || ''}`);
         }
 
         return {
@@ -301,7 +305,7 @@ export abstract class CodeBuilder {
             this.lockWatcher.Watch();
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Hidden', error);
         }
 
         // run build
@@ -356,6 +360,7 @@ export abstract class CodeBuilder {
         this.useFastCompile = options?.notRebuild;
         this.onlyDumpCompilerInfo = options?.onlyDumpCompilerInfo;
         this.otherArgs = options?.otherArgs;
+        this.threadNumOverride = options?.threadNumOverride;
 
         const prjConfig = this.project.GetConfiguration();
         const outDir = new File(this.project.ToAbsolutePath(prjConfig.getOutDir()));
@@ -364,19 +369,16 @@ export abstract class CodeBuilder {
         // generate command line
         const cmds = this.getCommands();
 
-        // 编译数据库模式优先使用 Go 版构建器(已与 C# 原版逐字节对拍验收,
-        // 单文件原生程序,无 .NET 运行时依赖);缺失时回退 C# 版
-        if (cmds.includes('--only-dump-compilerdb')) {
-            const goExe = ResManager.instance().getGoUnifyBuilderExe();
-            if (goExe.IsFile()) {
-                return CmdLineHandler.getCommandLine(goExe.path, cmds);
-            }
+        // 统一使用 Go 版构建器(单文件原生程序,无 .NET 运行时依赖):
+        // 完整构建/编译数据库/-r 模式均已与 C# 原版对拍验收
+        // (compile_commands.json/ref.json 逐字节一致,真实构建产物 .axf/.hex MD5 一致);
+        // C# 版已从扩展资源移除,Go 版缺失视为安装损坏
+        const goExe = ResManager.instance().getGoUnifyBuilderExe();
+        if (!goExe.IsFile()) {
+            throw new Error(`unify_builder-go not found: ${goExe.path} (extension res damaged, please reinstall)`);
         }
 
-        const commandLine = generateDotnetProgramCmd(
-            ResManager.instance().getUnifyBuilderExe(), cmds);
-
-        return commandLine;
+        return CmdLineHandler.getCommandLine(goExe.path, cmds);
     }
 
     private getCommands(): string[] {
@@ -399,7 +401,7 @@ export abstract class CodeBuilder {
             toolchainCfgFile: `${ResManager.GetInstance().getBuilderModelsDir().path}/${toolchain.modelName}`,
             buildMode: 'fast|multhread',
             showRepathOnLog: settingManager.isPrintRelativePathWhenBuild(),
-            threadNum: settingManager.getThreadNumber(),
+            threadNum: this.threadNumOverride || settingManager.getThreadNumber(),
             rootDir: this.project.GetRootDir().path,
             dumpPath: File.ToLocalPath(outDir),
             outDir: File.ToLocalPath(outDir),
@@ -513,7 +515,7 @@ export abstract class CodeBuilder {
                     builderOptions.options.afterBuildTasks = [];
                 builderOptions.options.afterBuildTasks = [command].concat(builderOptions.options.afterBuildTasks);
             } catch (error) {
-                GlobalEvent.emit('msg', newMessage('Warning', `Generating '${mkfile_path}' failed !`));
+                GlobalEvent.show_msgbox('Warning', `Generating '${mkfile_path}' failed !`);
                 GlobalEvent.log_error(error);
             }
         }
@@ -978,7 +980,7 @@ export class ARMCodeBuilder extends CodeBuilder {
                 }
                 res.rom = !isNaN(romSize) ? romSize : undefined;
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', error);
             }
 
             try {
@@ -990,7 +992,7 @@ export class ARMCodeBuilder extends CodeBuilder {
                 }
                 res.ram = !isNaN(ramSize) ? ramSize : undefined;
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', error);
             }
 
             return res;
@@ -1271,7 +1273,7 @@ class C51CodeBuilder extends CodeBuilder {
                     }
                 });
                 return memSize;
-            } catch (error) { GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden')); }
+            } catch (error) { GlobalEvent.show_msgbox('Hidden', error); }
         }
 
         return undefined;

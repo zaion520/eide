@@ -148,7 +148,7 @@ export class PackageManager {
                         packManager.SetDeviceInfo(devName, prjConfig.toolchainConfig.cpuType);
                     }
                 } catch (error) {
-                    GlobalEvent.emit('msg', newMessage('Error', 'Fail to load chip package for this project !'));
+                    GlobalEvent.show_msgbox('Error', 'Fail to load chip package for this project !');
                     GlobalEvent.log_error(error);
                     GlobalEvent.log_show();
                 }
@@ -1240,11 +1240,7 @@ export class PackageManager {
         const err = await this.compress.Unzip(pack, outDir);
         if (err) {
             GlobalEvent.emit('error', err);
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'Unzip package error ! ' + (<Error>err).message
-            });
+            GlobalEvent.show_msgbox('Warning', 'Unzip package error ! ' + (<Error>err).message);
             return;
         }
 
@@ -1262,16 +1258,16 @@ export class PackageManager {
                 GlobalEvent.emit('globalLog.append', `\n>>> exec script: '${postCmdFile.name}'\n\n`);
                 GlobalEvent.emit('globalLog.append', logTxt + '\n');
             } catch (error) {
-                GlobalEvent.emit('msg', newMessage('Warning', `Exec '${postCmdFile.name}' failed !, [path]: ${postCmdFile.path}`));
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                GlobalEvent.show_msgbox('Warning', `Exec '${postCmdFile.name}' failed !, [path]: ${postCmdFile.path}`);
+                GlobalEvent.show_msgbox('Hidden', error);
             }
         }
 
         try {
             this.LoadPackage(outDir);
         } catch (error) {
-            GlobalEvent.emit('msg', newMessage('Warning', `Install package error !, ${(<Error>error).message}`));
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+            GlobalEvent.show_msgbox('Warning', `Install package error !, ${(<Error>error).message}`);
+            GlobalEvent.show_msgbox('Hidden', error);
             return;
         }
 

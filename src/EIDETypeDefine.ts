@@ -623,7 +623,7 @@ export class ProjectConfiguration<T extends BuilderConfigData>
                 const prjObj = ProjectConfiguration.parseProjectFile(configFile.Read());
                 return <ProjectType>prjObj['type'];
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', error);
             }
         }
     }
@@ -1675,9 +1675,9 @@ export class WorkspaceConfiguration extends Configuration<WorkspaceConfig> {
             return obj;
         } catch (error) {
             GlobalEvent.log_error(error);
-            GlobalEvent.emit('msg', newMessage(
+            GlobalEvent.show_msgbox(
                 'Warning', view_str$prompt$loadws_cfg_failed.replace('{}', this.FILE_NAME)
-            ));
+            );
             this.isLoadFailed = true;
             return this.GetDefault();
         }

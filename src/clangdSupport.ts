@@ -806,6 +806,193 @@ export function extractManagedBlockInfo(content: string): ManagedBlockInfo[] {
 }
 
 // ---------------------------------------------------------------------------
+// 受管块治理(遗留标记族 + 失效项目回收)
+// ---------------------------------------------------------------------------
+
+/** 标记族(一个 begin/end 对) */
+export interface ManagedBlockMarkers {
+    begin: string;
+    end: string;
+}
+
+export const CLANGD_MANAGED_MARKERS: ManagedBlockMarkers = {
+    begin: CLANGD_MANAGED_BEGIN,
+    end: CLANGD_MANAGED_END
+};
+
+/**
+ * 遗留标记族:历史版本/官方版曾用 `EIDE Clangd Sync` 写同项目块。
+ * 本管线不再生成它,但必须先按"失效即回收"清理,否则块会跨版本无限累积
+ * (实测:一份 config.yaml 里堆了 16 个 Sync 块 / 227 条 PathMatch,131KB)。
+ */
+export const CLANGD_LEGACY_MANAGED_MARKERS: ManagedBlockMarkers = {
+    begin: '# BEGIN EIDE Clangd Sync',
+    end: '# END EIDE Clangd Sync'
+};
+
+/**
+ * 把 `createUserConfigPathMatch` 生成的正则还原为文件系统路径(无法还原时返回 undefined)。
+ * 生成形态: `^[dD]:/path/to/root/.*$` 或 `^/path/to/root/.*$`
+ */
+export function pathFromPathMatch(pattern: string): string | undefined {
+    const p = String(pattern || '').trim();
+    if (!p.startsWith('^') || !p.endsWith('/.*$')) { return undefined; }
+
+    let body = p.slice(1, -4);                         // 去掉开头 ^ 与结尾 /.*$
+    const drive = body.match(/^\[([A-Za-z])([A-Za-z])\]:/);
+    if (drive) {
+        body = `${drive[1].toUpperCase()}:` + body.slice(drive[0].length);
+    }
+    body = body.replace(/\\(.)/g, '$1');               // 还原 escapeRegex 的转义
+    return body || undefined;
+}
+
+/**
+ * 判断一个受管块是否已失效(可回收):
+ *  - 全部 PathMatch 指向的项目根都不存在 → 失效(项目已被删除/移动)
+ *  - 或:声明了 CompilationDatabase 但全部库目录都不存在 → 失效(僵尸库)
+ */
+export function isManagedBlockStale(
+    block: string,
+    pathExists: (p: string) => boolean,
+    dbExists: (p: string) => boolean
+): boolean {
+
+    // ---- 规则: 项目根全部不存在 ----
+    const pmRe = /PathMatch:\s*"([^"]+)"/g;
+    let pm: RegExpExecArray | null;
+    let hasPathMatch = false;
+    let anyRootExists = false;
+    while ((pm = pmRe.exec(block)) !== null) {
+        hasPathMatch = true;
+        const root = pathFromPathMatch(pm[1]);
+        if (root && pathExists(root)) { anyRootExists = true; break; }
+    }
+    if (hasPathMatch && !anyRootExists) { return true; }
+
+    // ---- 规则: 编译数据库全部不存在 ----
+    const dbRe = /CompilationDatabase:\s*"([^"]+)"/g;
+    let db: RegExpExecArray | null;
+    let hasDb = false;
+    while ((db = dbRe.exec(block)) !== null) {
+        hasDb = true;
+        if (dbExists(db[1])) { return false; }
+    }
+    return hasDb;
+}
+
+/**
+ * 治理 config.yaml:回收受管块。
+ *
+ * 两条规则:
+ *  1. **当前标记族(`Clangd Support`)**: 只回收"已失效"的块
+ *     (项目根已不存在 / 编译数据库已不存在) —— 在用配置保留。
+ *  2. **遗留标记族(`Clangd Sync`)**: **无条件全部回收**。
+ *     该格式已废弃,且它指向的 `.eide-clangd/` 旧布局已被本管线移除;
+ *     更关键的是:同一项目若同时存在 Sync 块与 Support 块,两者的
+ *     CompilationDatabase 会打架(实测:旧块把新布局的库截胡)。
+ *     真正在用的项目会在同一趟刷新里由 Support 块重新写入,因此整体回收是安全的。
+ */
+export function pruneStaleManagedBlocks(
+    content: string,
+    opts: {
+        pathExists: (p: string) => boolean;
+        dbExists: (p: string) => boolean;
+        /** 是否回收遗留标记族(默认 true;仅测试/诊断场景需要关掉) */
+        removeLegacy?: boolean;
+    }
+): { content: string; removed: number; removedLegacy: number } {
+
+    let out = String(content || '');
+    let removed = 0;
+    let removedLegacy = 0;
+
+    // ---- 1) 当前标记族: 按失效判定回收 ----
+    const currentRe = new RegExp(
+        `${escapeRegex(CLANGD_MANAGED_MARKERS.begin)} (\\S+)[\\s\\S]*?${escapeRegex(CLANGD_MANAGED_MARKERS.end)} \\1\\s*`,
+        'g'
+    );
+    out = out.replace(currentRe, (block) => {
+        if (isManagedBlockStale(block, opts.pathExists, opts.dbExists)) {
+            removed++;
+            return '';
+        }
+        return block;
+    });
+
+    // ---- 2) 遗留标记族: 无条件回收 ----
+    if (opts.removeLegacy !== false) {
+        const legacyRe = new RegExp(
+            `${escapeRegex(CLANGD_LEGACY_MANAGED_MARKERS.begin)} (\\S+)[\\s\\S]*?${escapeRegex(CLANGD_LEGACY_MANAGED_MARKERS.end)} \\1\\s*`,
+            'g'
+        );
+        out = out.replace(legacyRe, () => { removedLegacy++; return ''; });
+    }
+
+    return { content: out, removed, removedLegacy };
+}
+
+/**
+ * 结构自愈:清掉 config.yaml 中**顶层裸标量行**。
+ *
+ * clangd 的 config.yaml 顶层只允许映射(`key: value`)、注释(`#`)与文档分隔(`---`);
+ * 任何位于受管块之外的"裸标量"行都是无效 YAML,clangd 会报
+ * `Implicit map keys need to be followed by map values` /
+ * `Unknown Config key '<...>'`(实测: 出现过孤立的 base64 令牌碎片行)。
+ *
+ * 这种残渣来自**并发写入**:本扩展用整文件覆写,而同一份文件也被
+ * Qt Creator 等外部进程写,两边交叠就会拼接出残片。写前做一次自愈即可消除。
+ *
+ * 受管块**内部**的内容一律原样保留(里面本来就有缩进的标量,不能误删)。
+ */
+export function sanitizeClangdUserConfig(content: string): { content: string; removedLines: number } {
+
+    const lines = String(content ?? '').split('\n');
+    const out: string[] = [];
+    let removedLines = 0;
+    let inBlock = false;
+
+    for (const raw of lines) {
+        const line = raw.replace(/\r$/, '');
+
+        if (/^# BEGIN EIDE Clangd (?:Support|Sync) \S+\s*$/.test(line)) {
+            inBlock = true;
+            out.push(raw);
+            continue;
+        }
+        if (/^# END EIDE Clangd (?:Support|Sync) \S+\s*$/.test(line)) {
+            inBlock = false;
+            out.push(raw);
+            continue;
+        }
+        if (inBlock) {
+            out.push(raw);                    // 块内内容不动
+            continue;
+        }
+
+        const t = line.trim();
+        const isBlank = t.length === 0;
+        const isComment = t.startsWith('#');
+        const isDocSep = t === '---';
+        const isList = t.startsWith('-');
+        const isMapping = /^[^\s:#][^:]*:/.test(t);
+
+        if (!isBlank && !isComment && !isDocSep && !isList && !isMapping) {
+            removedLines++;                   // 顶层裸标量 → 视为残渣丢弃
+            continue;
+        }
+        out.push(raw);
+    }
+
+    return { content: out.join('\n'), removedLines };
+}
+
+/** 判断文本是否含指定标记族的块(供诊断使用) */
+export function hasManagedBlocks(content: string, markers: ManagedBlockMarkers = CLANGD_MANAGED_MARKERS): boolean {
+    return new RegExp(`${escapeRegex(markers.begin)} \\S+`).test(String(content ?? ''));
+}
+
+// ---------------------------------------------------------------------------
 // workspace settings (clangd.arguments)
 // ---------------------------------------------------------------------------
 

@@ -9,17 +9,24 @@ All notable version changes will be recorded in this file.
 ### [unreleased] revision
 
 **New**:
+  - `Builder`: **Build All 与 clangd/cpptools 刷新解耦**——Build All 期间连续切换 target 原本每次都触发 `UpdateCppConfig` 防抖刷新(cpptools 配置 + 编译数据库 + clangd 编译库重生成/唤醒),中间 target 的刷新既慢又无意义;现挂起整个刷新管线,恢复激活 target 后统一补刷一次(只针对最终激活 target);新增 `AbstractProject.suspendCppConfigUpdate/resumeCppConfigUpdate`
+  - `Builder`: **serial_monitor 功能移除,扩展 100% 去 .NET**——`res/tools/<os>/serial_monitor/`(最后一批 .NET 程序)整体删除;串口枚举改为系统原生实现零依赖(Windows 读注册表 `HARDWARE\DEVICEMAP\SERIALCOMM`,Linux/macOS 枚举 `/dev` 设备节点),`${port}`/`${portList}` 烧录变量与 STCgal 串口选择功能保留;构建路径的 `ensureDotnetRuntime`(.NET 检测/自动安装)与 `generateDotnetProgramCmd` 一并删除
+  - `Builder`: **Build All 多 target 并行构建**(默认开启,`EIDE.Builder.ParallelBuildAll` 可关闭回退串行)——三阶段:串行切换 target 生成各自 `build/<target>/builder.params` → 并行启动 Go builder(各 outDir 的 obj/`.lock`/`objs.db.json` 完全独立无共享状态,单 target 线程数按 CPU 核数均分避免超载,最多 4 并发) → 恢复激活态后统一刷新;冷构建 3 个 480 文件 target 时 wall time 约为串行的 1/2 ~ 1/3,单 target 增量场景不受影响;失败 target 汇总保留完整日志尾部
+  - `Builder`: **构建链路彻底去 .NET**——移除 C# 版 unify_builder 二进制(win32/linux/darwin 三平台)与代码内回退路径,所有构建场景(完整构建/编译数据库/`-r` 命令运行/`EIDE_BUILDER_DIR` 内置变量/系统 PATH 注入)统一指向 Go 版 unify_builder(缺失时报错提示重装,不再静默回退);`axf2elf`/`verchk` 两个无调用的 .NET 工具与 SQLite 专用 DLL 一并移除;serial_monitor(串口监视,唯一保留的 .NET 程序)从 C# builder 目录独立为 `res/tools/<os>/serial_monitor/`;darwin 平台 Go 版与 serial_monitor 改为 `arm64`/`x86_64` 子目录布局(移除无引用的 `darwin_arm64` 顶层目录)
+  - `Builder`: **完整构建管线切换至 Go 版 unify_builder**——编译 → 链接 → 产物(hex/bin) → PRE/POST-BUILD 任务 → 增量编译全链路移植完成,实际编译不再依赖 .NET 运行时。对拍验收(PROJ_B 真实项目,AC6 480 文件):compile_commands.json/ref.json 与 C# 原版逐字节一致,app.axf/app.hex MD5 完全一致,armlink 区域树/内存占用输出逐行一致,增量判定行为一致;并行 12 线程全量构建 25s(C# 27s)
+  - `Builder`: Go 版新增 `--out-makefile`/`--only-dump-args`/`-r`(命令运行器)/`--dry-run`/`--use-ccache`/`--sdcc-not-bundle-rel` 全参数支持,以及 SDCC bundle-rel、COSMIC lkf 生成、objOrderUsr glob 排序、map 解析(armlink/IAR/SDCC/通用)、按模型字符集解码(GBK 等经 golang.org/x/text);增量数据库以 `objs.db.json`(JSON 指纹库)替代 SQLite(格式与 C# 同步写出的 jsondb 一致,历史 SQLite 库首次运行全量重建,属预期)
   - `clangd`: 生成物收拢进 `<root>/.clangd/`——编译数据库移至 `.clangd/compile_commands.json`(config.yaml 受管块指针同步指向该目录,按项目 PathMatch 隔离,不影响其他项目块);解除 `--background-index=false` 强制注入,后台索引恢复默认开启(全库符号索引,"转到定义"不再要求目标 .c 已打开;索引存储跟随 CDB 目录自动落 `.clangd/.cache/`,项目根不再散落 `.cache`);工作区 files.exclude 自动收纳 `.clangd`;升级首跑幂等清理旧布局残留(根目录库/根 `.cache`/`.eide-clangd/`);注意 `.clangd` 目录名占用后项目级 `.clangd` 配置文件不可再用(本管线使用用户级 config.yaml,无实害)
   - `clangd`: 修复"未打开文件仍跳不到定义"——config.yaml 里历史工具/官方版写的 `EIDE Clangd Sync` 异前缀孤儿块(指针指向已删除的 .eide-clangd)与管线正确块同时命中,clangd 的 CompilationDatabase 打架导致库加载失败;管线现自动清理指向已不存在库的同项目孤儿块(在用的有效块保留);files.exclude 排除键改为仅 `compile_commands.json`(原整目录排除会连带隐藏后台索引 .cache)
   - `clangd`: 参数管理器主动剥除残留的 `--background-index=false`(=0 同)——旧版(≤3.27.28)注入工作区的显式关闭会把后台索引永久锁死("未打开文件跳不到定义"、.cache 不生成),3.27.29 起的"不干预"策略反而无法清除历史残留;现统一移除让 clangd 走默认开启(裸参/true/priority 等显式开启形态仍保留)。实测三形态对照:无参/裸参 → `.clangd/.cache/clangd/index` 全量索引生成(93 文件);false → 无全库索引无 .cache
   - `i18n`: 代码内用户可见文案接入 VSCode 官方 l10n 机制(`vscode.l10n.t()` + `l10n/bundle.l10n.zh-CN.json`,package.json 声明 `l10n` 字段)——目标删除/批量删除多选流程、Clangd 缓存重建提示的 QuickPick/模态确认框/消息全部跟随 UI 语言(运行时取词,与安装方式无关);新增 l10n 一致性守卫测试(扫描 src 的 l10n.t 调用,漏翻译即测试失败);清单 `%key%` 继续走 package.nls.json(清单本地化机制不变)
+  - `UI`: target 列表(切换/删除/重命名/克隆/复制 QuickPick)统一按"基础名 + 变体"分组排序(A8, A8_A, A8_B, B7, B7_A, B7_B;数字后缀按数值比较,A8 < A10),不再按配置写入顺序展示
   - `UI`: "删除目标"升级为多选批量(命令 ID `_cl.eide.target.delete` 与菜单位置不变):QuickPick 勾选多个 target(激活目标标注 `active` 且拒绝删除),模态确认后逐个删除(含旁路文件清理),单项失败不影响其余,结束汇总成功/失败
   - `clangd`: 编译数据库改为根目录单文件 `<root>/compile_commands.json`,切换 target 时自动重生成并唤醒 clangd;移除 `.eide-clangd/` 按目标子目录布局与 `pregenAllTargets` 命令(升级后首次打开项目自动清理旧目录);工具链关键字 shim 迁移到 `.eide/clangd/`;config.yaml 的 `CompilationDatabase` 指针恒定指向项目根
   - `clangd`: 显式关闭后台索引(注入 `--background-index=false`)——新版 clangd 该项默认开启,仅剥除参数不会生效;不再产生 `.cache` 索引目录,工作区设置中残留的 `--background-index` 开启形态会被自动替换
   - `clangd`: `clangd.arguments` 维护改为**双写**(workspace 级 + folder 级各写各的)——`.code-workspace` 场景下 folder 级对资源优先级更高且数组整体覆盖,只写 workspace 级会让修复失效(实测踩坑)
 
 **Changes**:
-  - `Builder`: 编译数据库生成(`--only-dump-compilerdb`,每次 UpdateCppConfig/切 target 触发)切换至 Go 版 unify_builder(单文件原生程序,零 .NET 运行时依赖;与 C# 原版在真实项目 AC6/GCC 上逐字节对拍验收);完整构建管线迁移进行中,C# 版仍负责实际编译
+  - `Builder`: 编译数据库生成(`--only-dump-compilerdb`,每次 UpdateCppConfig/切 target 触发)切换至 Go 版 unify_builder(单文件原生程序,零 .NET 运行时依赖;与 C# 原版在真实项目 AC6/GCC 上逐字节对拍验收);完整构建管线迁移进行中,C# 版仍负责实际编译(已在 3.27.33 完成切换)
   - `UI`: 项目右键菜单重排——构建/烧录/目标/生成/查看五组分列(构建所有目标归构建组、启动调试移入烧录组、生成类命令聚拢为 6_group:builder.params → 调试配置模板 → compile_commands → lib 生成器 → 重定位根目录,查看类归 7_group);"导出为..."子菜单补 viewItem 限制(此前任意节点都会出现);芯片包节点 CMSIS 三项分组排序并汉化;"包含所有源文件"与"排除所有源文件"拆分排序;"设置编译器"补分组
   - `UI`: 右键菜单"重建 Clangd 缓存"更名为"生成 compile_commands"(命令 ID `_cl.eide.project.clangd.rebuildCache` 不变)
   - `Cppcheck`: 移除静态检测功能(命令、右键"静态检查"子菜单、`EIDE.Cppcheck.ExecutablePath` 设置与工具安装项一并删除)

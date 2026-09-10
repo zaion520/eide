@@ -533,11 +533,7 @@ export class DependenceManager implements ManagerInterface {
             try {
                 this.reinstallToolchainDep();
             } catch (err) {
-                GlobalEvent.emit('msg', {
-                    type: 'Warning',
-                    contentType: 'string',
-                    content: 'repair toolchain dependence failed ! ' + err
-                });
+                GlobalEvent.show_msgbox('Warning', 'repair toolchain dependence failed ! ' + err);
             }
         }
 

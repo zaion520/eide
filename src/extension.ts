@@ -42,8 +42,6 @@ import {
     ERROR, WARNING, INFORMATION,
     view_str$operation$serialport, view_str$operation$baudrate, view_str$operation$serialport_name,
     txt_install_now, txt_yes, view_str$prompt$feedback, rating_text, later_text, sponsor_author_text,
-    view_str$prompt$install_dotnet_and_restart_vscode,
-    view_str$prompt$install_dotnet_failed,
     view_str$prompt$not_found_compiler, view_str$prompt$debugCfgNotSupported, not_support_no_arm_project,
     view_str$prompt$requireOtherExtension, view_str$add_missed_stubs
 } from './StringTable';
@@ -125,7 +123,7 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('eide.refresh.external_tools_index', () => {
         ResInstaller.instance()
             .refreshExternalToolsIndex(true)
-            .then(() => GlobalEvent.emit('msg', newMessage('Info', 'Refresh Done.')))
+            .then(() => GlobalEvent.show_msgbox('Info', 'Refresh Done.'))
             .catch(err => {
                 GlobalEvent.log_warn(err);
                 GlobalEvent.log_show();
@@ -512,13 +510,13 @@ function ShowUUID() {
 
 function reloadJlinkDevices() {
     if (ResManager.GetInstance().loadJlinkDevList()) {
-        GlobalEvent.emit('msg', newMessage('Info', 'Done !, JLink devices list has been reloaded !'));
+        GlobalEvent.show_msgbox('Info', 'Done !, JLink devices list has been reloaded !');
     }
 }
 
 function reloadStm8Devices() {
     if (ResManager.GetInstance().loadStm8DevList()) {
-        GlobalEvent.emit('msg', newMessage('Info', 'Done !, STM8 devices list has been reloaded !'));
+        GlobalEvent.show_msgbox('Info', 'Done !, STM8 devices list has been reloaded !');
     }
 }
 
@@ -544,7 +542,7 @@ async function newClangFormatFile() {
 function cleanCache() {
     try {
         platform.DeleteAllChildren(ResManager.instance().GetTmpDir());
-        GlobalEvent.emit('msg', newMessage('Info', 'Done.'));
+        GlobalEvent.show_msgbox('Info', 'Done.');
     } catch (error) {
         GlobalEvent.log_error(error);
     }
@@ -769,7 +767,7 @@ async function tryInstallBinaries(binFolder: File, binVersion: string): Promise<
             }
 
             if (res instanceof Error) { /* download failed */
-                GlobalEvent.emit('msg', ExceptionToMessage(res, 'Warning'));
+                GlobalEvent.show_msgbox('Warning', res);
                 return false;
             } else if (res == undefined) { /* canceled */
                 return false;
@@ -930,7 +928,7 @@ function exportEnvToSysPath(context?: vscode.ExtensionContext) {
 
     // export some eide binaries path to system env path
     const prependSystemPaths: string[] = [
-        File.normalize(`${resManager.getUnifyBuilderExe().dir}`),
+        File.normalize(`${resManager.getGoUnifyBuilderExe().dir}`),
         File.normalize(`${legacyBuilderDir.path}/utils`),  // C:\Users\<USER-NAME>\.eide\bin\builder\utils
         File.normalize(`${legacyBuilderDir.dir}/scripts`), // C:\Users\<USER-NAME>\.eide\bin\scripts
         File.normalize(`${resManager.Get7zDir().path}`),   // builtin 7za tool
@@ -1052,153 +1050,7 @@ function exportEnvToSysPath(context?: vscode.ExtensionContext) {
     /* setup python3 cmd */
     process.env['EIDE_PY3_CMD'] = resManager.getPython3();
 
-    // .NET 工具会收集用法数据，帮助我们改善你的体验。它由 Microsoft 收集并与社区共享。
-    // 你可通过使用喜欢的 shell 将 DOTNET_CLI_TELEMETRY_OPTOUT 环境变量设置为 "1" 或 "true" 来选择退出遥测。
-    // 阅读有关 .NET CLI 工具遥测的更多信息: https://aka.ms/dotnet-cli-telemetry
-    process.env['DOTNET_CLI_TELEMETRY_OPTOUT'] = '1'; // disable telemetry
-    // 支持运行时回滚
-    // https://learn.microsoft.com/zh-cn/dotnet/core/whats-new/dotnet-core-3-0#major-version-runtime-roll-forward
-    process.env['DOTNET_ROLL_FORWARD'] = 'Major';
-
     SettingManager.GetInstance().syncGlobalEnvVariablesToNodeEnv();
-}
-
-async function checkAndInstallRuntime() {
-
-    const dotnet_chk_cmd = `dotnet --list-runtimes`;
-
-    //
-    // if not found dotnet, preset dotnet root folder into system env
-    // dotnet path: 'C:\Program Files\dotnet'
-    //
-    if (os.platform() == 'win32') {
-        try {
-            ChildProcess.execSync(dotnet_chk_cmd);
-        } catch (error) {
-            if (platform.osType() == 'win32') {
-                platform.appendToSysEnv(process.env, ['C:\\Program Files\\dotnet']);        // for win x64
-                platform.appendToSysEnv(process.env, ['C:\\Program Files (x86)\\dotnet']);  // for win x86
-            }
-        }
-    }
-
-    //
-    // check/install .NET
-    //
-    try {
-        GlobalEvent.log_info('Checking .NET runtime ...');
-        GlobalEvent.log_info(`Exec cmd: '${dotnet_chk_cmd}'`);
-        const dotnetInfo = ChildProcess.execSync(dotnet_chk_cmd).toString().trim();
-        GlobalEvent.emit('globalLog.append', dotnetInfo + os.EOL);
-        // check dotnet version
-        let dotnetVerLine: string | undefined;
-        const lines = dotnetInfo.trim().split(/\r\n|\n/);
-        for (const line_ of lines) {
-            const line = line_.trim();
-            const m = /Microsoft\.NETCore\.App (\d+)\./i.exec(line);
-            if (m && m.length > 1) {
-                const rt_ver = parseInt(m[1]);
-                if (rt_ver >= 6) {
-                    dotnetVerLine = line;
-                    GlobalEvent.log_info(`.NET runtime: '${dotnetVerLine}' found !`);
-                    break;
-                }
-            }
-        }
-        if (!dotnetVerLine) {
-            throw new Error(`Not found available .NET Core runtime`);
-        }
-    } catch (error) {
-
-        GlobalEvent.log_error(error);
-
-        GlobalEvent.emit('globalLog.show'); // show error log for user
-        GlobalEvent.log_info('Not found [.NET6 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/6.0) !');
-
-        /* @deprecated
-        const msg = `Not found [.NET6 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/6.0), please install it !`;
-        const sel = await vscode.window.showWarningMessage(msg, txt_install_now);
-        if (!sel) { return } // user canceled */
-
-        // for other platform, user need install it manually
-        if (os.platform() != 'win32') {
-            const msg = `Not found [.NET6 runtime](https://dotnet.microsoft.com/en-us/download/dotnet/6.0) on your pc, please install it !`;
-            vscode.window.showWarningMessage(msg);
-            // https://dotnet.microsoft.com/en-us/download/dotnet/scripts
-            // utility.openUrl(`https://dotnet.microsoft.com/en-us/download/dotnet/scripts`);
-        }
-
-        // win32, we can auto install it
-        else {
-            const defPkgName = 'dotnet-runtime-6.0.5-win-x64.exe';
-
-            let pkgReady: boolean = false;
-            let pkgFile: File;
-
-            // if found local installer pkg, use it
-            const localPkg = File.fromArray([ResManager.GetInstance().getAppRootFolder().path, defPkgName]);
-            if (localPkg.IsFile()) {
-                pkgReady = true;
-                pkgFile = localPkg;
-            }
-
-            // if not found local installer pkg, download it
-            else {
-
-                pkgFile = File.fromArray([os.tmpdir(), defPkgName]);
-                if (pkgFile.IsFile()) { // if we have a cached old file, check it
-                    const sevenZip = utility.newSevenZipperInstance();
-                    const pkgSha256 = sevenZip.sha256(pkgFile);
-                    const reqSha256 = 'A085714B879DC1CB85538109640E22A2CBFF2B91195DF540A5F98AEA09AF2C1E'.toLowerCase();
-                    if (pkgSha256 == reqSha256) { pkgReady = true; } // sha256 verified, use cached old file
-                    else { try { fs.unlinkSync(pkgFile.path); } catch { } } // sha256 verify failed, del old file
-                }
-
-                if (!pkgReady) { // if no cached pkg, download it
-
-                    const downloadUrl = `https://download.visualstudio.microsoft.com/download/pr/b395fa18-c53b-4f7f-bf91-6b2d3c43fedb/d83a318111da9e15f5ecebfd2d190e89/dotnet-runtime-6.0.5-win-x64.exe`;
-
-                    pkgReady = await vscode.window.withProgress({
-                        location: vscode.ProgressLocation.Notification,
-                        title: 'Downloading .NET6 runtime installer',
-                        cancellable: false
-                    }, async (progress, token): Promise<boolean> => {
-
-                        const res = await utility.downloadFileWithProgress(downloadUrl, pkgFile.name, progress, token);
-
-                        if (res instanceof Buffer) {
-                            try {
-                                fs.writeFileSync(pkgFile.path, res);
-                                return true;
-                            } catch (error) {
-                                return false;
-                            }
-                        }
-
-                        if (res instanceof Error) {
-                            GlobalEvent.emit('error', res);
-                        }
-
-                        return false;
-                    });
-                }
-            }
-
-            if (pkgReady && pkgFile.IsFile()) {
-                try {
-                    ChildProcess.execFileSync(pkgFile.path);
-                    vscode.window.showInformationMessage(view_str$prompt$install_dotnet_and_restart_vscode);
-                } catch (error) {
-                    GlobalEvent.emit('msg', newMessage('Error', view_str$prompt$install_dotnet_failed));
-                }
-            } else {
-                vscode.window.showWarningMessage(`Install .NET6 runtime failed, you need install it manually !`);
-                // https://dotnet.microsoft.com/en-us/download/dotnet/scripts
-                // https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-6.0.5-windows-x64-installer
-                utility.openUrl(`https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-6.0.5-windows-x64-installer`);
-            }
-        }
-    }
 }
 
 async function InitComponents(context: vscode.ExtensionContext): Promise<boolean | undefined> {
@@ -1216,7 +1068,7 @@ async function InitComponents(context: vscode.ExtensionContext): Promise<boolean
             resManager.Get7za().path,
         ];
 
-        new File(resManager.getUnifyBuilderExe().dir)
+        new File(resManager.getGoUnifyBuilderExe().dir)
             .GetList(undefined, File.EXCLUDE_ALL_FILTER)
             .forEach((f) => {
                 if (!f.suffix) { // nosuffix file is an exe file
@@ -1246,9 +1098,6 @@ async function InitComponents(context: vscode.ExtensionContext): Promise<boolean
 
     // binaries patchs
     await patchBinaries();
-
-    // NOTE: .NET runtime check is deferred to the first build (see ensureDotnetRuntime),
-    // so startup no longer spawns `dotnet` processes.
 
     // register telemetry hook if user enabled
     try {
@@ -1315,18 +1164,6 @@ async function InitComponents(context: vscode.ExtensionContext): Promise<boolean
         vscode.window.registerTerminalLinkProvider(new EideTerminalLinkProvider()));
 
     return true;
-}
-
-let dotnetRuntimeCheckDone = false;
-
-/**
- * 确保 .NET runtime 可用,每个会话只检查一次。
- * unify_builder 是 .NET 程序,构建前必须有 runtime;启动时不再检查。
- */
-export async function ensureDotnetRuntime(): Promise<void> {
-    if (dotnetRuntimeCheckDone) { return; }
-    dotnetRuntimeCheckDone = true;
-    await checkAndInstallRuntime();
 }
 
 function RegisterMsgListener() {
@@ -1615,7 +1452,7 @@ class EideTerminalProvider implements vscode.TerminalProfileProvider {
                     shellName = 'cmd';
                     shellPath = cmd;
                 } else {
-                    GlobalEvent.emit('msg', newMessage('Error', `Not found 'cmd.exe' on your pc !`));
+                    GlobalEvent.show_msgbox('Error', `Not found 'cmd.exe' on your pc !`);
                     return undefined;
                 }
             }
@@ -2038,7 +1875,7 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
             case 'RISCV_GCC':
                 if (!toolchainManager.isToolchainPathReady(toolchain.name)) {
                     const msg = view_str$prompt$not_found_compiler.replace('{}', 'EIDE.RISCV.InstallDirectory');
-                    GlobalEvent.emit('msg', newMessage('Warning', msg));
+                    GlobalEvent.show_msgbox('Warning', msg);
                     return result;
                 }
                 gdbPath = NodePath.join(
@@ -2048,7 +1885,7 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
             case 'ANY_GCC':
                 if (!toolchainManager.isToolchainPathReady(toolchain.name)) {
                     const msg = view_str$prompt$not_found_compiler.replace('{}', 'EIDE.Toolchain.AnyGcc.InstallDirectory');
-                    GlobalEvent.emit('msg', newMessage('Warning', msg));
+                    GlobalEvent.show_msgbox('Warning', msg);
                     return result;
                 }
                 gdbPath = NodePath.join(
@@ -2619,7 +2456,7 @@ function c51ToSDCC() {
     if (vscode.window.activeTextEditor) {
 
         if (!fileFilter.test(vscode.window.activeTextEditor.document.fileName)) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'this file is not a .h/.c file !'));
+            GlobalEvent.show_msgbox('Warning', 'this file is not a .h/.c file !');
             return;
         }
 
@@ -2633,9 +2470,9 @@ function c51ToSDCC() {
                     res.push(handleLine(_line, index + 1));
                 });
                 fs.writeFileSync(file.path, res.join(os.EOL));
-                GlobalEvent.emit('msg', newMessage('Info', 'Convertion finished !'));
+                GlobalEvent.show_msgbox('Info', 'Convertion finished !');
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                GlobalEvent.show_msgbox('Warning', error);
             }
         }
     }

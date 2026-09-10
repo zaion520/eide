@@ -37,7 +37,7 @@
     "homepage": "https://em-ide.com",
     "license": "MIT",
     "description": "A mcu development environment for 8051/AVR/STM8/Cortex-M/MIPS/RISC-V",
-    "version": "3.27.32",
+    "version": "3.27.46",
     "preview": false,
     "engines": {
         "vscode": "^1.89.0"
@@ -339,6 +339,12 @@
                         "scope": "resource",
                         "markdownDescription": "%settings.builder.extraCommandLine%",
                         "default": ""
+                    },
+                    "EIDE.Builder.ParallelBuildAll": {
+                        "type": "boolean",
+                        "scope": "resource",
+                        "markdownDescription": "%settings.builder.parallelBuildAll%",
+                        "default": true
                     },
                     "EIDE.Builder.EnvironmentVariables": {
                         "type": "array",

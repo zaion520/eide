@@ -24,6 +24,7 @@
 
 import * as events from 'events';
 import { Message, ExceptionToMessage, newMessage, MessageType } from './Message';
+import type { GlobalEventMap, GlobalEventName, GlobalEventListener } from './types/GlobalEventMap';
 
 let _globalEvent: GlobalEvent | undefined;
 
@@ -42,48 +43,23 @@ export class GlobalEvent {
         return _globalEvent;
     }
 
-    //event
-    static on(event: 'extension_launch_done', listener: () => void): void;
-    static on(event: 'project.opened', listener: (prj: any) => void): void;
-    static on(event: 'project.closed', listener: (uid?: string) => void): void;
-    static on(event: 'project.activeStatusChanged', listener: (uid: string) => void): void;
-
-    //msg
-    static on(event: 'error', listener: (error: Error) => void): void;
-    static on(event: 'msg', listener: (msg: Message) => void): void;
-    static on(event: 'globalLog', listener: (msg: Message) => void): void;
-    static on(event: 'globalLog.append', listener: (log: string) => void): void;
-    static on(event: 'globalLog.show', listener: () => void): void;
-    static on(event: any, args?: any): void {
-        GlobalEvent.GetInstance()._emitter.on(event, args);
+    // 事件名与参数类型统一登记在 GlobalEventMap(见 ./types/GlobalEventMap.ts),
+    // 此处不再保留 `event: any` 兜底 —— 拼错事件名会在编译期报错
+    static on<K extends GlobalEventName>(event: K, listener: GlobalEventListener<K>): void {
+        GlobalEvent.GetInstance()._emitter.on(event, listener as (...args: any[]) => void);
     }
 
-    static once(event: any, args?: any): void {
-        GlobalEvent.GetInstance()._emitter.once(event, args);
+    static once<K extends GlobalEventName>(event: K, listener: GlobalEventListener<K>): void {
+        GlobalEvent.GetInstance()._emitter.once(event, listener as (...args: any[]) => void);
     }
 
-    static prepend(event: 'msg', listener: (msg: Message) => void): void;
-    static prepend(event: any, args?: any): void {
-        GlobalEvent.GetInstance()._emitter.prependListener(event, args);
+    static prepend<K extends GlobalEventName>(event: K, listener: GlobalEventListener<K>): void {
+        GlobalEvent.GetInstance()._emitter.prependListener(event, listener as (...args: any[]) => void);
     }
 
-    //event
-    static emit(event: 'extension_launch_done'): boolean;
-    static emit(event: 'project.opened', prj: any): boolean;
-    static emit(event: 'project.closed', uid?: string): boolean;
-    static emit(event: 'project.activeStatusChanged', newuid: string): boolean;
-
-    //msg
-    static emit(event: 'error', error: Error): boolean;             // 错误弹框（vscode 右下角）
-    /**
-     * @deprecated 已废弃，改用 GlobalEvent.show_msgbox
-     */
-    static emit(event: 'msg', msg: Message): boolean;               // 消息弹框（vscode 右下角）
-    static emit(event: 'globalLog', msg: Message): boolean;         // 打印日志+换行 -> 输出面板
-    static emit(event: 'globalLog.append', log: string): boolean;   // 打印原始日志字串 -> 输出面板
-    static emit(event: 'globalLog.show'): boolean;                  // 向用户显示eide输出面板日志
-    static emit(event: any, args?: any): boolean {
-        return GlobalEvent.GetInstance()._emitter.emit(event, args);
+    // 事件名与参数类型由 GlobalEventMap 约束
+    static emit<K extends GlobalEventName>(event: K, ...args: GlobalEventMap[K]): boolean {
+        return GlobalEvent.GetInstance()._emitter.emit(event, ...args);
     }
 
     //vscode notify
@@ -121,8 +97,8 @@ export class GlobalEvent {
 
 GlobalEvent.on('error', (err) => {
     if (err) {
-        GlobalEvent.emit('msg', ExceptionToMessage(err));
+        GlobalEvent.show_msgbox('Error', err);
     } else {
-        GlobalEvent.emit('msg', ExceptionToMessage(new Error('Empty Error received !')));
+        GlobalEvent.show_msgbox('Error', new Error('Empty Error received !'));
     }
 });

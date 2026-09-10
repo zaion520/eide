@@ -383,12 +383,8 @@ class C51Parser extends KeilParser<KeilC51Option> {
             }
 
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: '编译配置导入失败！请手动完成设置'
-            });
+            GlobalEvent.show_msgbox('Warning', error);
+            GlobalEvent.show_msgbox('Warning', '编译配置导入失败！请手动完成设置');
         }
     }
 
@@ -495,12 +491,8 @@ class C51Parser extends KeilParser<KeilC51Option> {
                 target51.C51.Optimize = options["c/cpp-compiler"]['optimization-level']?.replace('level-', '') || '8';
             }
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: '编译配置导出失败！请在 Keil 中手动完成设置'
-            });
+            GlobalEvent.show_msgbox('Warning', error);
+            GlobalEvent.show_msgbox('Warning', '编译配置导出失败！请在 Keil 中手动完成设置');
         }
     }
 
@@ -1006,12 +998,8 @@ class ARMParser extends KeilParser<KeilARMOption> {
                 memInfo.RAM[4].mem.size = chipData.OCR_RVCT10.Size;
             }
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'Import compile options failed！Please complete the setup manually'
-            });
+            GlobalEvent.show_msgbox('Warning', error);
+            GlobalEvent.show_msgbox('Warning', 'Import compile options failed！Please complete the setup manually');
         }
     }
 
@@ -1310,12 +1298,8 @@ class ARMParser extends KeilParser<KeilARMOption> {
                 });
             }
         } catch (error) {
-            GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'Export compile options failed！Please complete the setup manually'
-            });
+            GlobalEvent.show_msgbox('Warning', error);
+            GlobalEvent.show_msgbox('Warning', 'Export compile options failed！Please complete the setup manually');
         }
     }
 

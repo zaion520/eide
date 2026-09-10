@@ -38,8 +38,8 @@ import {
     createManagedConfigToken,
     renderClangdUserConfigBlock,
     upsertManagedConfigBlock,
-    removeManagedConfigBlocks,
-    extractManagedBlockInfo,
+    pruneStaleManagedBlocks,
+    sanitizeClangdUserConfig,
     upsertClangdWorkspaceArgs,
     isC51Toolchain,
     isStm8Toolchain,
@@ -257,7 +257,20 @@ function writeIfChanged(filePath: string, content: string): boolean {
             return false;
         }
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        fs.writeFileSync(filePath, content, 'utf8');
+
+        // 原子写: 先写同目录临时文件再 rename。
+        // clangd 的 config.yaml 与 Qt Creator 等外部进程共享, 直接整文件覆写会在
+        // 并发时产生"半截文件/拼接残渣"(实测: 文件里出现孤立的令牌碎片行,
+        // clangd 报 `Unknown Config key '<碎片>'` / YAML 结构错)。
+        const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(tmpPath, content, 'utf8');
+        try {
+            fs.renameSync(tmpPath, filePath);
+        } catch {
+            // rename 失败(如目标被占用)时回退为直接写, 宁可非原子也不能丢更新
+            fs.writeFileSync(filePath, content, 'utf8');
+            try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+        }
         return true;
     } catch (error) {
         GlobalEvent.log_error(error);
@@ -480,6 +493,25 @@ const BASE_REMOVE_FLAGS = [
     '-fzero-init-padding-bits=all', '-fzero-init-padding-bits=*', '-fno-malloc-dce'
 ];
 
+/**
+ * config.yaml 写操作的短路缓存。
+ *
+ * 刷新管线在切 target / 改配置时被频繁触发,而 config.yaml 可能很大
+ * (实测 131KB / 227 条 PathMatch)。若"渲染结果"与"文件自身签名"都没变,
+ * 就没有必要每轮都全量读文件 + 跑两轮正则 + 比较写回。
+ * 用 mtime+size 作文件签名,外部进程(Qt Creator 等)改动文件时也能感知并重算。
+ */
+const userConfigWriteState = new Map<string, { sig: string; block: string }>();
+
+function fileSignature(filePath: string): string {
+    try {
+        const st = fs.statSync(filePath);
+        return `${st.mtimeMs}:${st.size}`;
+    } catch {
+        return 'missing';
+    }
+}
+
 function updateClangdUserConfig(prj: AbstractProject, toolchainName: string, activeTargetKey: string): boolean {
     const configDir = getClangdUserConfigDir();
     if (!configDir) { return false; }
@@ -497,39 +529,6 @@ function updateClangdUserConfig(prj: AbstractProject, toolchainName: string, act
     const pathRoots = [rootDir, ...collectExternalSourceRoots(prj.GetConfiguration<any>().config, rootDir)];
     const pathMatches = pathRoots.map((root) => createUserConfigPathMatch(root));
 
-    let existingContent = '';
-    try {
-        if (fs.existsSync(configPath)) { existingContent = fs.readFileSync(configPath, 'utf8'); }
-    } catch (error) {
-        GlobalEvent.log_error(error);
-        return false;
-    }
-
-    // 僵尸块回收:编译数据库文件已不存在的受管块直接移除。
-    // 放在 db-exists 早退之前:升级首跑根库尚未生成时也能清掉旧 `.eide-clangd/...` 块
-    let content = existingContent;
-    for (const info of extractManagedBlockInfo(content)) {
-        if (info.compilationDatabase && !fs.existsSync(info.compilationDatabase)) {
-            content = removeManagedConfigBlocks(content, info.token);
-        }
-    }
-
-    // 异前缀孤儿块清理:历史版本/官方版曾用 `EIDE Clangd Sync` 前缀写同项目块,
-    // 本管线(Support 前缀)无法 upsert 覆盖它,两个块同时命中会让 clangd 的
-    // CompilationDatabase 打架(实测:孤儿块指向已删除的 .eide-clangd,新布局库被截胡)。
-    // 仅当孤儿块指向的库目录已不存在时移除;指向有效目录的块(如在用配置)保留。
-    const orphanSyncRe = new RegExp(
-        `# BEGIN EIDE Clangd Sync ${token}[\\s\\S]*?# END EIDE Clangd Sync ${token}\\s*`, 'g');
-    content = content.replace(orphanSyncRe, (orphan) => {
-        const dbMatch = /CompilationDatabase:\s*"([^"]+)"/.exec(orphan);
-        return (dbMatch && fs.existsSync(dbMatch[1])) ? orphan : '';
-    });
-
-    if (!fs.existsSync(dbPath)) {
-        // 根库尚未生成:只落盘回收结果(若有变化),不写新块
-        return content !== existingContent ? writeIfChanged(configPath, content) : false;
-    }
-
     const block = renderClangdUserConfigBlock({
         pathMatch: pathMatches,
         compilationDatabase: toPosix(getProjectDbDir(rootDir)),
@@ -540,8 +539,45 @@ function updateClangdUserConfig(prj: AbstractProject, toolchainName: string, act
         suppressDiagnostics: isDiagnosticUnsupportedToolchain(toolchainName) ? ['*'] : ['unused-includes']
     });
 
-    const nextContent = upsertManagedConfigBlock(content, block, token);
-    return writeIfChanged(configPath, nextContent);
+    // 短路:渲染结果与文件签名都未变 → 免读免写
+    const sig = fileSignature(configPath);
+    const cached = userConfigWriteState.get(configPath);
+    if (cached && cached.sig === sig && cached.block === block) { return false; }
+
+    let existingContent = '';
+    try {
+        if (fs.existsSync(configPath)) { existingContent = fs.readFileSync(configPath, 'utf8'); }
+    } catch (error) {
+        GlobalEvent.log_error(error);
+        return false;
+    }
+
+    // 受管块治理:一趟扫掉**两个标记族**里所有失效的块。
+    // 旧实现只按当前项目 token 清理,导致别的项目/历史版本留下的块永不被回收
+    // (实测堆到 131KB / 227 条 PathMatch);这里改为全量体检:项目根已不存在、
+    // 编译数据库已不存在、跨版本累积的 Sync 块都会在同一趟里清掉。
+    const pathExists = (p: string) => { try { return !!p && fs.existsSync(p); } catch { return false; } };
+
+    // 结构自愈:清掉并发写入留下的"顶层裸标量"残渣。
+    // 实测症状:文件里出现孤立的 base64 令牌碎片行,clangd 报
+    // `Implicit map keys need to be followed by map values` / `Unknown Config key '<碎片>'`。
+    const sanitized = sanitizeClangdUserConfig(existingContent);
+
+    const pruned = pruneStaleManagedBlocks(sanitized.content, { pathExists, dbExists: pathExists });
+    let content = pruned.content;
+
+    let changed: boolean;
+    if (!fs.existsSync(dbPath)) {
+        // 根库尚未生成:只落盘回收结果(若有变化),不写新块
+        changed = content !== existingContent ? writeIfChanged(configPath, content) : false;
+    } else {
+        changed = writeIfChanged(configPath, upsertManagedConfigBlock(content, block, token));
+    }
+
+    // 无论是否写盘,都记录本次输入签名:下次同输入可直接短路
+    // (写盘后 mtime/size 变化,这里重新取一次)
+    userConfigWriteState.set(configPath, { sig: fileSignature(configPath), block });
+    return changed;
 }
 
 // ---------------------------------------------------------------------------
@@ -653,6 +689,9 @@ function migrateLegacyClangdConfig(prj: AbstractProject): boolean {
     if (!fs.existsSync(clangdPath)) { return false; }
 
     try {
+        // `.clangd` 可能是用户自建的目录(如 background-index/.cache 工作区布局),不是文件——跳过迁移,
+        // 否则 readFileSync(目录) 每次 clangd 刷新都会抛 EISDIR
+        if (!fs.statSync(clangdPath).isFile()) { return false; }
         const content = fs.readFileSync(clangdPath, 'utf8');
         if (content.includes('# BEGIN EIDE Clangd Support')) { return false; }
         const match = content.match(/(^|\n)\s*CompilationDatabase\s*:\s*"?([^"\n#]+)"?\s*$/m);

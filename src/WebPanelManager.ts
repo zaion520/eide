@@ -365,7 +365,7 @@ export class WebPanelManager {
 
         if (cmsisConfig == undefined ||
             cmsisConfig.items.length == 0) {
-            GlobalEvent.emit('msg', newMessage('Info', 'Not found any CMSIS Configurations in this header !'));
+            GlobalEvent.show_msgbox('Info', 'Not found any CMSIS Configurations in this header !');
             return; // no data
         }
 

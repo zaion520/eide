@@ -31,7 +31,7 @@ import * as NodePath from 'path';
 import { File } from '../lib/node-utility/File';
 import { GlobalEvent } from './GlobalEvents';
 import { ExceptionToMessage, newMessage } from './Message';
-import * as Utility from './utility';
+import { notifyReloadWindow } from './UiNotify';
 import { find, exeSuffix, userhome, osType } from './Platform';
 import { WorkspaceManager } from './WorkspaceManager';
 import { ToolchainName } from './ToolchainManager';
@@ -61,6 +61,18 @@ interface INIStatus {
 
 function formatPath(path: string): string {
     return path.trim().replace(/\\\s*$/, '');
+}
+
+/**
+ * 与 `utility.formatPath` 逐字节等价的本地实现(含 ToLocalPath 路径转换)。
+ *
+ * 原先这几处调用的是 `Utility.formatPath`, 使 SettingManager 反向依赖 utility,
+ * 与 `utility → SettingManager` 构成运行时环。此处内联等价实现以断环 ——
+ * 注意**不能**直接改用上面的 `formatPath`: 后者不做路径转换, 语义不同
+ * (项目内已有多处依赖各自的既有行为, 不能合并)。
+ */
+function formatPluginPath(p: string): string {
+    return File.ToLocalPath(p.trim().replace(/(?:\\|\/)+$/, ''));
 }
 
 export class SettingManager {
@@ -120,11 +132,11 @@ export class SettingManager {
                     }
 
                     if (e.affectsConfiguration('EIDE.Win32.Msys.Enable')) {
-                        Utility.notifyReloadWindow(view_str$prompt$needReloadToUpdateEnv);
+                        notifyReloadWindow(view_str$prompt$needReloadToUpdateEnv);
                     }
 
                     if (e.affectsConfiguration('EIDE.MCP.Server.Enable')) {
-                        Utility.notifyReloadWindow(view_str$prompt$needReload);
+                        notifyReloadWindow(view_str$prompt$needReload);
                     }
 
                     //! 暂时弃用 ccache
@@ -245,7 +257,7 @@ export class SettingManager {
     private getFullPathByPluginConfig(configName: string): string | undefined {
         const path = this.getConfiguration().get<string>(configName);
         if (path) {
-            const p = Utility.formatPath(this._formatPathForPluginSettings(path));
+            const p = formatPluginPath(this._formatPathForPluginSettings(path));
             if (File.IsExist(p)) {
                 return p;
             }
@@ -561,6 +573,11 @@ export class SettingManager {
         return num;
     }
 
+    /** Build All 多 target 并行构建开关(关闭则回退逐个串行) */
+    isParallelBuildAll(): boolean {
+        return this.getConfiguration().get<boolean>('Builder.ParallelBuildAll') ?? true;
+    }
+
     //! deprecated.
     // IsConvertAxf2Elf(): boolean {
     //     return this.getConfiguration().get<boolean>('ARM.Option.AxfToElf') || false;
@@ -630,7 +647,7 @@ export class SettingManager {
 
     private GetMdkINIOrUv4File(): File {
         const iniPath = this.getConfiguration().get<string>('ARM.INI.Path') || '';
-        return new File(Utility.formatPath(iniPath));
+        return new File(formatPluginPath(iniPath));
     }
 
     GetMdkArmDir(): File | undefined {
@@ -700,7 +717,7 @@ export class SettingManager {
 
         /* parse from env */
         if (process.env && process.env['Keil_Root']) {
-            const rootFolder = Utility.formatPath(process.env['Keil_Root']);
+            const rootFolder = formatPluginPath(process.env['Keil_Root']);
             const armFolder = File.fromArray([rootFolder, 'ARM']);
             if (armFolder.IsDir() &&
                 File.fromArray([armFolder.path, 'ARMCC']).IsDir()) {
@@ -843,7 +860,7 @@ export class SettingManager {
 
     private GetC51INIFile(): File {
         const iniPath = this.getConfiguration().get<string>('C51.INI.Path') || '';
-        return new File(Utility.formatPath(iniPath));
+        return new File(formatPluginPath(iniPath));
     }
 
     GetC51Dir(): File {
@@ -882,7 +899,7 @@ export class SettingManager {
 
         /* parse from env */
         if (process.env && process.env['Keil_Root']) {
-            const rootFolder = Utility.formatPath(process.env['Keil_Root']);
+            const rootFolder = formatPluginPath(process.env['Keil_Root']);
             const c51Folder = File.fromArray([rootFolder, 'C51']);
             if (c51Folder.IsDir() &&
                 File.fromArray([c51Folder.path, 'BIN']).IsDir()) {

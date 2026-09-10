@@ -117,6 +117,7 @@
 
     "settings.builder.jobs": "The number of threads when build",
     "settings.builder.extraCommandLine": "Append additional commandline when invoke unify_builder",
+    "settings.builder.parallelBuildAll": "Build all targets in parallel (each builder shares CPU threads). Disable to build targets one by one",
     "settings.builder.presetEnvVars": "Preset Global Environment Variables when build project",
     
     "settings.enable.ccache": "Determine whether to enable [ccache](https://ccache.dev/) used to speed up compilation of large projects",

@@ -347,6 +347,11 @@ func (g *CmdGenerator) fromModel(modelName, langName, fpath string, onlyDumpArgs
 	}
 	buildArgs.ShellCommand = "\"" + replaceEnvVariable(exeFullPath, false) + "\" " +
 		replaceEnvVariable(compilerArgs, false)
+
+	// check cmd to determine source file need recompile(C# 1964-1968)
+	if oldCmd, ok := tableGet(buildArgs.OutPath); ok {
+		buildArgs.SourceArgsChanged = oldCmd != buildArgs.ShellCommand
+	}
 	return buildArgs
 }
 

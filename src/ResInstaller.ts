@@ -373,7 +373,7 @@ export class ResInstaller {
 
         /* lock installer */
         if (this.lock(name) == false) {
-            GlobalEvent.emit('msg', newMessage('Warning', 'Busy !, This package is in installing !'));
+            GlobalEvent.show_msgbox('Warning', 'Busy !, This package is in installing !');
             return false;
         }
 
@@ -421,7 +421,7 @@ export class ResInstaller {
                 }
 
                 if (res instanceof Error) { /* download failed */
-                    GlobalEvent.emit('msg', ExceptionToMessage(res, 'Warning'));
+                    GlobalEvent.show_msgbox('Warning', res);
                     return false;
                 } else if (res == undefined) { /* canceled */
                     return false;
@@ -472,7 +472,7 @@ export class ResInstaller {
 
                         const unzipErr = await unzipper.Unzip(resourceFile, outDir);
                         if (unzipErr) {
-                            GlobalEvent.emit('msg', ExceptionToMessage(unzipErr, 'Warning'));
+                            GlobalEvent.show_msgbox('Warning', unzipErr);
                             resolveIf(false);
                             return;
                         }
@@ -501,9 +501,9 @@ export class ResInstaller {
 
                                     if (cancel.isCancellationRequested) {
                                         GlobalEvent.emit('globalLog.append', `\n----- user canceled -----\n`);
-                                        GlobalEvent.emit('msg', newMessage('Info', `Installation has been canceled !`));
+                                        GlobalEvent.show_msgbox('Info', `Installation has been canceled !`);
                                     } else {
-                                        GlobalEvent.emit('msg', newMessage('Warning', `Install failed, see detail in 'eide.log' !`));
+                                        GlobalEvent.show_msgbox('Warning', `Install failed, see detail in 'eide.log' !`);
                                     }
 
                                     resolveIf(false);

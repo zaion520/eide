@@ -651,8 +651,8 @@ export abstract class ArmBaseCompileConfigModel
             this.data.cpuType = from_model.data.cpuType;
         } else { // not found, set default
             this.data.cpuType = 'Cortex-M3';
-            GlobalEvent.emit('msg', newMessage('Warning', 
-                `This toolchain not support "${from_model.data.cpuType}". Use default value.`));
+            GlobalEvent.show_msgbox('Warning', 
+                `This toolchain not support "${from_model.data.cpuType}". Use default value.`);
         }
 
         const cur_toolchain = this.prjConfigData.toolchain;
@@ -2703,7 +2703,7 @@ class PyOCDUploadModel extends UploadConfigModel<PyOCDFlashOptions> {
                                 };
                             });
                     } catch (error) {
-                        GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                        GlobalEvent.show_msgbox('Warning', error);
                     }
                 }
                 break;

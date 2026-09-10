@@ -90,6 +90,7 @@ func toRelativePath(root_, targetPath_ string, useUnixPath bool) string {
 // ---- 环境变量 ----
 
 var curEnvs = map[string]string{}
+var cliVars = map[string]string{} // 仅供 $(key)/${key} 展开,不写入真实进程环境(C# cliVars)
 
 func setEnvValue(key, value string) {
 	if strings.ToLower(key) == "path" {
@@ -149,14 +150,24 @@ func pathEnvKey() string {
 
 var _ = fmt.Sprintf // keep import
 
-// os/exec 简易包装(避免额外 import 排布问题)
-func os_exec_run(exe, args string) (string, error) {
-	return "", fmt.Errorf("compiler version query is deferred to stage 3")
+func isMacOS() bool { return runtime.GOOS == "darwin" }
+
+// kvPair: 有序键值对(ref.json 写出用)
+type kvPair struct{ k, v string }
+
+// baseName: Path.GetFileName
+func baseName(p string) string {
+	if i := strings.LastIndexAny(p, `\/`); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
+
+// exeBaseDir: C# appBaseDir
 func exeBaseDir() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return "."
 	}
-	return filepath.Dir(exe)
+	return strings.TrimSuffix(filepath.Dir(exe), string(os.PathSeparator))
 }

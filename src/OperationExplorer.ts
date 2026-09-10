@@ -472,7 +472,7 @@ export class OperationExplorer {
                 return; // exit
 
             default:
-                GlobalEvent.emit('msg', newMessage('Warning', `unkown project type ${prj_type.type} !`));
+                GlobalEvent.show_msgbox('Warning', `unkown project type ${prj_type.type} !`);
                 return; // exit
         }
 
@@ -898,7 +898,7 @@ export class OperationExplorer {
                         return;
 
                     if (toolchain?.getToolchainPrefix == undefined) {
-                        GlobalEvent.emit('msg', newMessage('Warning', `Not support modify prefix for toolchain: '${toolchain.name}'`));
+                        GlobalEvent.show_msgbox('Warning', `Not support modify prefix for toolchain: '${toolchain.name}'`);
                         return;
                     }
 
@@ -1209,11 +1209,7 @@ export class OperationExplorer {
     async OnCreateFromGithubTemplate() {
 
         if (this.locked) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'Busy !, please wait'
-            });
+            GlobalEvent.show_msgbox('Warning', 'Busy !, please wait');
             return;
         }
 
@@ -1235,7 +1231,7 @@ export class OperationExplorer {
 
             netReq.on('error', (err) => {
                 (<Error>err).message = `Failed to connect '${remoteUrl}'`;
-                GlobalEvent.emit('msg', ExceptionToMessage(err, 'Hidden'));
+                GlobalEvent.show_msgbox('Hidden', err);
             });
 
             try {
@@ -1285,11 +1281,11 @@ export class OperationExplorer {
                     });
 
                     if (!res.success) {
-                        GlobalEvent.emit('msg', newMessage('Warning', `Can't connect to Github repository !, msg: ${res.msg || 'null'}`));
+                        GlobalEvent.show_msgbox('Warning', `Can't connect to Github repository !, msg: ${res.msg || 'null'}`);
                         this.locked = false;
                         return;
                     } else if (res.content === undefined) {
-                        GlobalEvent.emit('msg', newMessage('Warning', `Can't get content from Github repository !, msg: ${res.msg || 'null'}`));
+                        GlobalEvent.show_msgbox('Warning', `Can't get content from Github repository !, msg: ${res.msg || 'null'}`);
                         this.locked = false;
                         return;
                     }
@@ -1317,7 +1313,7 @@ export class OperationExplorer {
                 // get template index file info
                 const indexFileInfo = file_list.get('index.json');
                 if (indexFileInfo === undefined) {
-                    GlobalEvent.emit('msg', newMessage('Warning', `Not found template 'index.json' at Github repository !`));
+                    GlobalEvent.show_msgbox('Warning', `Not found template 'index.json' at Github repository !`);
                     this.locked = false;
                     return;
                 }
@@ -1353,7 +1349,7 @@ export class OperationExplorer {
                         templateInfoList = templateIndexInfo.template_list;
                     } else {
                         const msg: string = indexFileBuf instanceof Error ? `, msg: ${indexFileBuf.message}` : '';
-                        GlobalEvent.emit('msg', newMessage('Warning', `Download template 'index.json' failed !${msg}`));
+                        GlobalEvent.show_msgbox('Warning', `Download template 'index.json' failed !${msg}`);
                         this.locked = false;
                         return;
                     }
@@ -1526,7 +1522,7 @@ export class OperationExplorer {
                                 }
 
                                 else if (res instanceof Error) {
-                                    GlobalEvent.emit('msg', ExceptionToMessage(res, 'Warning'));
+                                    GlobalEvent.show_msgbox('Warning', res);
                                     resolve(false);
                                     return;
                                 }
@@ -1546,11 +1542,11 @@ export class OperationExplorer {
                 // error
                 else {
                     this.locked = false;
-                    GlobalEvent.emit('msg', newMessage('Warning', `'download_url' and 'git_clone_url' can not be null !`));
+                    GlobalEvent.show_msgbox('Warning', `'download_url' and 'git_clone_url' can not be null !`);
                 }
 
             } catch (error) {
-                GlobalEvent.emit('msg', ExceptionToMessage(error, 'Warning'));
+                GlobalEvent.show_msgbox('Warning', error);
                 this.locked = false;
                 return;
             }
@@ -1645,7 +1641,7 @@ export class OperationExplorer {
                     WorkspaceManager.getInstance().openWorkspace(new File(outputDirPath));
                 }
             } else {
-                GlobalEvent.emit('msg', newMessage('Warning', `Clone project failed !, Check log in 'eide.log' panel`));
+                GlobalEvent.show_msgbox('Warning', `Clone project failed !, Check log in 'eide.log' panel`);
             }
         }
 
@@ -1655,11 +1651,7 @@ export class OperationExplorer {
     async OnCreateFromDiskTemplate() {
 
         if (this.locked) {
-            GlobalEvent.emit('msg', {
-                type: 'Warning',
-                contentType: 'string',
-                content: 'Busy !, please wait'
-            });
+            GlobalEvent.show_msgbox('Warning', 'Busy !, please wait');
             return;
         }
 

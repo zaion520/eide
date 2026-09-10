@@ -36,7 +36,13 @@ function main() {
     fs.writeFileSync(pkgPath, updated);
     console.log(`version: ${current} -> ${next}`);
 
-    execSync('npx vsce package', { cwd: root, stdio: 'inherit', shell: true });
+    // vsce 解析顺序:本地 node_modules/.bin → 全局(PATH 中的 vsce,已验证 3.9.2 可用)
+    // → npx 兜底。绝不直接 npx:npx 会在本地缺失时联网解析最新版,
+    // 官方源不稳时 502 空转,且 bump 版本在 vsce 之前执行,导致"版本号+1 但无产物"。
+    const localVsce = path.join(root, 'node_modules', '.bin',
+        process.platform === 'win32' ? 'vsce.cmd' : 'vsce');
+    const vsceCmd = fs.existsSync(localVsce) ? `"${localVsce}"` : 'vsce';
+    execSync(`${vsceCmd} package`, { cwd: root, stdio: 'inherit', shell: true });
 
     const vsix = path.join(root, `${name}-${next}.vsix`);
     if (!fs.existsSync(vsix)) {

@@ -543,7 +543,7 @@ class StcgalUploader extends HexUploader<string[]> {
     protected async _prepare(eraseAll?: boolean): Promise<UploaderPreData<string[]>> {
 
         if (eraseAll) {
-            GlobalEvent.emit('msg', newMessage('Warning', `not support 'Erase Chip' for '${this.toolType}' flasher`));
+            GlobalEvent.show_msgbox('Warning', `not support 'Erase Chip' for '${this.toolType}' flasher`);
             return { isOk: false };
         }
 
@@ -569,11 +569,7 @@ class StcgalUploader extends HexUploader<string[]> {
             try {
                 option = JSON.parse(opFile.Read());
             } catch (error) {
-                GlobalEvent.emit('msg', {
-                    type: 'Warning',
-                    contentType: 'string',
-                    content: 'Invalid flash option file !'
-                });
+                GlobalEvent.show_msgbox('Warning', 'Invalid flash option file !');
             }
         }
 
@@ -1109,7 +1105,7 @@ class OpenOCDUploader extends HexUploader<string[]> {
     protected async _prepare(eraseAll?: boolean): Promise<UploaderPreData<string[]>> {
 
         if (eraseAll) {
-            GlobalEvent.emit('msg', newMessage('Warning', `not support 'Erase Chip' for '${this.toolType}' flasher`));
+            GlobalEvent.show_msgbox('Warning', `not support 'Erase Chip' for '${this.toolType}' flasher`);
             return { isOk: false };
         }
 
@@ -1267,7 +1263,7 @@ class ProbeRSUploader extends HexUploader<string[]> {
         }
 
         if (eraseAll) {
-            GlobalEvent.emit('msg', newMessage('Warning', `not support 'Erase Chip' for '${this.toolType}' flasher`));
+            GlobalEvent.show_msgbox('Warning', `not support 'Erase Chip' for '${this.toolType}' flasher`);
             return { isOk: false };
         }
 

@@ -8,6 +8,20 @@ set -u
 
 CS_DIR="$1"; GO_EXE="$2"; PARAMS="$3"
 
+# cd $rootDir 后仍可用:转为绝对路径
+case "$GO_EXE" in
+  /*|[A-Za-z]:*) ;;
+  *) GO_EXE="$(pwd)/$GO_EXE" ;;
+esac
+case "$CS_DIR" in
+  /*|[A-Za-z]:*) ;;
+  *) CS_DIR="$(pwd)/$CS_DIR" ;;
+esac
+case "$PARAMS" in
+  /*|[A-Za-z]:*) ;;
+  *) PARAMS="$(pwd)/$PARAMS" ;;
+esac
+
 rootDir=$(node -e "const p=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log(p.rootDir)" "$PARAMS")
 outDir=$(node -e "const p=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log(p.outDir)" "$PARAMS")
 refName=$(node -e "const p=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log(p.sourceMapName||'ref.json')" "$PARAMS")

@@ -1,0 +1,63 @@
+.git
+.github
+.vscode
+.vscode-test
+out
+src
+.EIDE
+doc
+**/*.log
+!**/template/*.jflash
+**/*.jflash
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/tslint.json
+**/*.map
+**/*.ts
+**/.gitignore
+*.code-workspace
+**/sln.record
+**/data/config.json
+/bin/ARM/*.temp
+/bin/ARM/*.bat
+**/*.pdb
+**/ARM/*.xml
+*.js
+!dist/extension.js
+!dist/mcp_server.js
+*.cpuprofile
+*.vscodeignore
+
+# internal template projects
+res/template/projects
+*.js.map
+
+# eide makefile template
+.gitmodules
+res/eide_makefile_template
+
+# ignore unused files
+bin
+bin/builder/*.xml
+bin/builder/*.exe.config
+bin/tools
+docs
+test
+note.md
+
+# shell script
+*.sh
+.envrc
+
+# go builder source & dev artifacts (runtime binaries ship in res/tools)
+unify_builder-go
+update_bin
+ref
+
+# 开发期脚本(依赖分析/安装流程), 不随扩展分发
+scripts
+
+# local full-repo backup archives (no legit .rar/.vsix ships in the package;
+# note: res/data/*.7z IS a real asset, so .7z must NOT be excluded)
+*.rar
+*.vsix
