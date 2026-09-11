@@ -16,6 +16,7 @@
     "src/ProblemMatcher.ts",
     "src/ProjTreeItem.ts",
     "src/ProjectConfiguration.ts",
+    "src/ProjectDataProvider.ts",
     "src/ResInstaller.ts",
     "src/ResManager.ts",
     "src/SettingManager.ts",
