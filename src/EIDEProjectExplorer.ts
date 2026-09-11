@@ -2441,7 +2441,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 `${AbstractProject.EIDE_DIR}${File.sep}*.dat`,
             ];
 
-            defExcludeList.push('.clangd'); // clangd 配置生成器常开,导出时排除其配置目录
+            defExcludeList.push('clangd'); // clangd 配置生成器常开,导出时排除 CDB 目录(含机器相关路径)
 
             // if this is a project, prehandle it
             let prj: AbstractProject | undefined;

@@ -3,16 +3,16 @@
  *
  * 把 clangd 支持整合进 EIDE 进程内:
  *  1. 读取构建时同步生成的 `<outDir>/<target>/builder.params`,
- *     经 clangdSupport 变换成 clangd 友好的 `<root>/.clangd/compile_commands.json`
+ *     经 clangdSupport 变换成 clangd 友好的 `<root>/clangd/compile_commands.json`
  *     (项目收拢目录下单文件,随激活 target 重生成;工具链私有 flag 已翻译/剥离,
  *     C51/STM8 等家族注入关键字宏与兼容头,shim 存放于 `.eide/clangd/`);
- *  2. 维护 clangd 用户级 config.yaml 的受管配置块(PathMatch 定界 + 幂等更新 + 僵尸块回收);
- *     CompilationDatabase 指针指向 `<root>/.clangd`(按项目隔离,多项目可各指各的布局);
+ *  2. 项目级 `.clangd` 配置文件(方案 D, 与 .code-workspace 同目录):CompilationDatabase 指向
+ *     `<root>/clangd`;存在性检测(用户手写不触碰)+ 幂等更新;用户级 config.yaml 里本项目的
+ *     受管块(两标记族)迁移移除;
  *  3. 维护工作区 clangd.arguments(--clang-tidy=false / --header-insertion=never;
  *     background-index 不干预——clangd 默认开启,后台索引跟随 CDB 目录自动落在
- *     `<root>/.clangd/.cache/`,配合 files.exclude 收纳为不可见)与 files.exclude(`.clangd`);
- *  4. 迁移旧版 EIDE 生成的项目级 `.clangd`(它会在 clangd 侧覆盖用户级 config.yaml,与新管线冲突;
- *     迁移先于目录创建执行,腾出 `.clangd` 目录名);
+ *     `<root>/clangd/.cache/`,配合 files.exclude 收纳为不可见)与 files.exclude(库文件);
+ *  4. 迁移:旧生成器的 `.clangd` 文件改名备份;旧 CDB 目录 `.clangd/` 同卷改名为 `clangd/`(索引缓存保留);
  *  5. 升级清理:删除旧版按 target 预生成的 `.eide-clangd/` 目录与根目录散落的旧库/旧 `.cache`。
  *
  * 由 AbstractProject.UpdateCppConfig 防抖触发(始终开启,原 EIDE.Option.EnableClangdConfigGenerator 开关已移除)。
@@ -26,7 +26,6 @@ import { GlobalEvent } from './GlobalEvents';
 import { BuilderOptions } from './EIDETypeDefine';
 import { ToolchainManager } from './ToolchainManager';
 import type { ToolchainName } from './types/ToolchainTypes';
-import { collectExternalSourceRoots } from './ProjectRootTool';
 import {
     buildClangdCommandTokens,
     buildClangdContextForTarget,
@@ -35,11 +34,13 @@ import {
     getProjectDbDir,
     asCompileCommandFile,
     isSupportedSourceFile,
-    createUserConfigPathMatch,
     createManagedConfigToken,
-    renderClangdUserConfigBlock,
-    upsertManagedConfigBlock,
     pruneStaleManagedBlocks,
+    removeManagedBlocksAllFamilies,
+    resolveClangdProjectConfigDir,
+    upsertProjectClangdConfigFile,
+    migrateCdbDirToClangd,
+    PROJECT_CLANGD_CONFIG_NAME,
     sanitizeClangdUserConfig,
     upsertClangdWorkspaceArgs,
     isC51Toolchain,
@@ -484,7 +485,7 @@ export function cleanupLegacyClangdArtifacts(prj: AbstractProject): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 2. clangd user config.yaml (managed blocks)
+// 2. 项目级 .clangd 配置文件(方案 D) + 用户级 config.yaml 迁移移除
 // ---------------------------------------------------------------------------
 
 /** clangd 无法解析的基础 Remove 列表(第二道防线,覆盖非本扩展生成的命令) */
@@ -494,15 +495,6 @@ const BASE_REMOVE_FLAGS = [
     '-fzero-init-padding-bits=all', '-fzero-init-padding-bits=*', '-fno-malloc-dce'
 ];
 
-/**
- * config.yaml 写操作的短路缓存。
- *
- * 刷新管线在切 target / 改配置时被频繁触发,而 config.yaml 可能很大
- * (实测 131KB / 227 条 PathMatch)。若"渲染结果"与"文件自身签名"都没变,
- * 就没有必要每轮都全量读文件 + 跑两轮正则 + 比较写回。
- * 用 mtime+size 作文件签名,外部进程(Qt Creator 等)改动文件时也能感知并重算。
- */
-const userConfigWriteState = new Map<string, { sig: string; block: string }>();
 
 function fileSignature(filePath: string): string {
     try {
@@ -513,37 +505,57 @@ function fileSignature(filePath: string): string {
     }
 }
 
-function updateClangdUserConfig(prj: AbstractProject, toolchainName: string, activeTargetKey: string): boolean {
+/**
+ * 项目级 `.clangd` 配置文件(方案 D):落盘/幂等更新在项目根(或 .code-workspace 同目录)。
+ * 存在性检测由 upsertProjectClangdConfigFile 承担:用户手写的文件不触碰;
+ * 内容不含 target 信息 → 切 target 时内容不变,零写盘。
+ */
+function updateProjectClangdConfigFile(prj: AbstractProject, toolchainName: string): boolean {
+    const rootDir = prj.getProjectRoot().path;
+    const configDir = resolveClangdProjectConfigDir(rootDir);
+    const configPath = path.join(configDir, PROJECT_CLANGD_CONFIG_NAME);
+    // CompilationDatabase 相对配置文件所在目录解析(文档语义), POSIX 化
+    const compilationDatabase = toPosix(path.relative(configDir, getProjectDbDir(rootDir)) || '.');
+    try {
+        const result = upsertProjectClangdConfigFile(configPath, {
+            compilationDatabase,
+            addFlags: [],
+            removeFlags: BASE_REMOVE_FLAGS,
+            suppressDiagnostics: isDiagnosticUnsupportedToolchain(toolchainName) ? ['*'] : ['unused-includes']
+        });
+        if (result === 'skipped-user-owned') {
+            GlobalEvent.log_info(`project '.clangd' at '${configPath}' is user-owned, EIDE leaves it untouched`);
+            return false;
+        }
+        if (result === 'skipped-directory') {
+            GlobalEvent.log_error(`project '.clangd' at '${configPath}' is a directory (legacy CDB layout not migrated?)`);
+            return false;
+        }
+        return result === 'created' || result === 'updated';
+    } catch (error) {
+        GlobalEvent.log_error(error);
+        return false;
+    }
+}
+
+/** 用户级 config.yaml 迁移移除的短路缓存(同签名免重读) */
+const userConfigRemovalState = new Map<string, string>();
+
+/**
+ * 方案 D 迁移:把**本项目 token** 的受管块从用户级 config.yaml 移除(两标记族)。
+ * 顺带保留既有治理:结构自愈(sanitize)+ 僵尸块回收(pruneStaleManagedBlocks,
+ * 清其他项目/历史版本遗留的失效块)。其他项目的有效块保留,各自升级时迁移。
+ */
+function removeOwnManagedBlocksFromUserConfig(prj: AbstractProject): boolean {
     const configDir = getClangdUserConfigDir();
     if (!configDir) { return false; }
 
     const configPath = path.join(configDir, 'config.yaml');
-    const rootDir = prj.getProjectRoot().path;
-    const token = createManagedConfigToken(rootDir);
-    // 指针恒定:CompilationDatabase 固定指向 `<root>/.clangd`(其下的 compile_commands.json 即
-    // 收拢目录单文件库,后台索引 .cache 也随 CDB 目录落在 .clangd/.cache/),切换 target 由
-    // 重生成库内容承担,不再翻指针。库文件尚不存在(项目从未构建)时不写新块,但先做僵尸块回收,
-    // 清掉指向已删除 `.eide-clangd/...` 的旧受管块
-    const dbPath = getProjectDbPath(rootDir);
-    // PathMatch 覆盖:项目根 + 根外源码/包含目录(如 PROJ_A 项目的 ../Library、../EXTEND),
-    // 否则根外源文件不会被 clangd 命中而回退到启发式解析
-    const pathRoots = [rootDir, ...collectExternalSourceRoots(prj.GetConfiguration<any>().config, rootDir)];
-    const pathMatches = pathRoots.map((root) => createUserConfigPathMatch(root));
+    const token = createManagedConfigToken(prj.getProjectRoot().path);
 
-    const block = renderClangdUserConfigBlock({
-        pathMatch: pathMatches,
-        compilationDatabase: toPosix(getProjectDbDir(rootDir)),
-        token,
-        activeTargetKey,
-        addFlags: [],
-        removeFlags: BASE_REMOVE_FLAGS,
-        suppressDiagnostics: isDiagnosticUnsupportedToolchain(toolchainName) ? ['*'] : ['unused-includes']
-    });
-
-    // 短路:渲染结果与文件签名都未变 → 免读免写
+    // 短路:文件签名未变 → 上次已移除且无外部改动,免读免写
     const sig = fileSignature(configPath);
-    const cached = userConfigWriteState.get(configPath);
-    if (cached && cached.sig === sig && cached.block === block) { return false; }
+    if (userConfigRemovalState.get(configPath) === sig) { return false; }
 
     let existingContent = '';
     try {
@@ -553,34 +565,19 @@ function updateClangdUserConfig(prj: AbstractProject, toolchainName: string, act
         return false;
     }
 
-    // 受管块治理:一趟扫掉**两个标记族**里所有失效的块。
-    // 旧实现只按当前项目 token 清理,导致别的项目/历史版本留下的块永不被回收
-    // (实测堆到 131KB / 227 条 PathMatch);这里改为全量体检:项目根已不存在、
-    // 编译数据库已不存在、跨版本累积的 Sync 块都会在同一趟里清掉。
     const pathExists = (p: string) => { try { return !!p && fs.existsSync(p); } catch { return false; } };
-
-    // 结构自愈:清掉并发写入留下的"顶层裸标量"残渣。
-    // 实测症状:文件里出现孤立的 base64 令牌碎片行,clangd 报
-    // `Implicit map keys need to be followed by map values` / `Unknown Config key '<碎片>'`。
     const sanitized = sanitizeClangdUserConfig(existingContent);
-
     const pruned = pruneStaleManagedBlocks(sanitized.content, { pathExists, dbExists: pathExists });
-    let content = pruned.content;
+    const removed = removeManagedBlocksAllFamilies(pruned.content, token);
+    const nextContent = removed.content;
 
-    let changed: boolean;
-    if (!fs.existsSync(dbPath)) {
-        // 根库尚未生成:只落盘回收结果(若有变化),不写新块
-        changed = content !== existingContent ? writeIfChanged(configPath, content) : false;
-    } else {
-        changed = writeIfChanged(configPath, upsertManagedConfigBlock(content, block, token));
+    const changed = nextContent !== existingContent ? writeIfChanged(configPath, nextContent) : false;
+    userConfigRemovalState.set(configPath, fileSignature(configPath));
+    if (changed) {
+        GlobalEvent.log_info(`user config.yaml: removed ${removed.removed} managed block(s) for this project (migrated to project-level '.clangd')`);
     }
-
-    // 无论是否写盘,都记录本次输入签名:下次同输入可直接短路
-    // (写盘后 mtime/size 变化,这里重新取一次)
-    userConfigWriteState.set(configPath, { sig: fileSignature(configPath), block });
     return changed;
 }
-
 // ---------------------------------------------------------------------------
 // 3. workspace settings (clangd.arguments)
 // ---------------------------------------------------------------------------
@@ -623,8 +620,8 @@ function updateClangdWorkspaceSettings(prj: AbstractProject): boolean {
 }
 
 /**
- * 维护工作区 files.exclude:只隐藏 `<root>/.clangd/compile_commands.json`(大体积库文件),
- * `.clangd/.cache/` 后台索引与目录本身保持可见(便于观察索引状态)。
+ * 维护工作区 files.exclude:只隐藏 `<root>/clangd/compile_commands.json`(大体积库文件),
+ * `clangd/.cache/` 后台索引与目录本身保持可见(便于观察索引状态);`.clangd` 配置文件保持可见。
  * 顺带迁移旧键(整目录隐藏的 dot-clangd,会把 .cache 连带藏掉)。
  * 与 arguments 同款双写语义:已定义的作用域合并补键(不覆盖用户已有排除项),
  * 两个作用域都未定义时落到 folder 级。
@@ -633,12 +630,12 @@ function updateClangdWorkspaceFileExclude(prj: AbstractProject): boolean {
     const uri = vscode.Uri.file(prj.getProjectRoot().path);
     const filesConfig = vscode.workspace.getConfiguration('files', uri);
     const inspect = filesConfig.inspect<Record<string, boolean>>('exclude');
-    const EXCLUDE_KEY = '**/.clangd/compile_commands.json';
-    const LEGACY_KEY = '**/.clangd';
+    const EXCLUDE_KEY = '**/clangd/compile_commands.json';
+    const LEGACY_KEYS = ['**/.clangd', '**/.clangd/compile_commands.json'];
 
     const nextValue = (stored: Record<string, boolean> | undefined): Record<string, boolean> => {
         const merged: Record<string, boolean> = { ...(stored || {}) };
-        delete merged[LEGACY_KEY]; // 迁移:不再整目录隐藏
+        for (const k of LEGACY_KEYS) { delete merged[k]; } // 迁移:旧 .clangd 相关键全部让位
         merged[EXCLUDE_KEY] = true;
         return merged;
     };
@@ -647,7 +644,8 @@ function updateClangdWorkspaceFileExclude(prj: AbstractProject): boolean {
         const wanted = nextValue(stored);
         const cur = stored || {};
         // 只要还有旧的整目录键、或缺少库文件键,就需要写
-        return cur[LEGACY_KEY] === true || cur[EXCLUDE_KEY] !== true
+        const hasLegacy = LEGACY_KEYS.some((k) => cur[k] === true);
+        return hasLegacy || cur[EXCLUDE_KEY] !== true
             || Object.keys(cur).length !== Object.keys(wanted).length;
     };
 
@@ -768,7 +766,8 @@ export function rebuildClangdCache(prj: AbstractProject): RebuildClangdCacheResu
     cacheCleared = cleanupLegacyClangdArtifacts(prj) || cacheCleared;
 
     const entries = generateDbForTarget(prj, targetName);
-    updateClangdUserConfig(prj, prj.getToolchain().name, targetName);
+    updateProjectClangdConfigFile(prj, prj.getToolchain().name);
+    removeOwnManagedBlocksFromUserConfig(prj);
     updateClangdWorkspaceSettings(prj);
     updateClangdWorkspaceFileExclude(prj);
     void tryRestartClangd();
@@ -786,8 +785,18 @@ export function updateClangdIntegration(prj: AbstractProject): void {
 
         cleanupLegacyClangdArtifacts(prj); // 升级清理旧布局残留(.eide-clangd/根库/根 .cache),不计入 changed
         let changed = migrateLegacyClangdConfig(prj);
+        switch (migrateCdbDirToClangd(prj.getProjectRoot().path)) {
+            case 'renamed':
+                GlobalEvent.log_info("legacy CDB dir '.clangd/' renamed to 'clangd/' (index cache preserved)");
+                changed = true;
+                break;
+            case 'blocked':
+                GlobalEvent.log_error("both '.clangd/' and 'clangd/' exist - resolve manually, project config file skipped");
+                break;
+        }
         changed = generateClangdCompilationDatabase(prj) || changed;
-        changed = updateClangdUserConfig(prj, toolchainName, activeTargetKey) || changed;
+        changed = updateProjectClangdConfigFile(prj, toolchainName) || changed;
+        changed = removeOwnManagedBlocksFromUserConfig(prj) || changed;
         changed = updateClangdWorkspaceSettings(prj) || changed;
         changed = updateClangdWorkspaceFileExclude(prj) || changed;
 
