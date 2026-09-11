@@ -47,3 +47,18 @@ export const LIB_FILE_FILTER: RegExp = /\.(?:lib|a|o|obj)$/i;
 
 /** 汇编源文件后缀匹配(值原属 AbstractProject.asmfileFilter) */
 export const ASM_FILE_FILTER: RegExp = /\.(?:s|asm|a51)$/i;
+
+/** 项目配置文件版本。原在 EIDETypeDefine.ts, 下沉到叶子以切断 ProjectConfiguration 与它的运行时环 */
+export const EIDE_CONF_VERSION = '4.2';
+
+/** 保存项目数据结构时需从 eide.json 中排除的键(仅插件内部使用)。原在 EIDETypeDefine.ts, 下沉到叶子 */
+export const EXCL_KEYS_IN_EIDE_JSON = [
+    'mode',
+    'excludeList',
+    'toolchain',
+    'toolchainConfig',
+    'toolchainConfigMap',
+    'uploader',
+    'uploadConfig',
+    'uploadConfigMap'
+];

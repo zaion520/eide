@@ -26,7 +26,7 @@
  * 虚拟源(virtual source)实现 —— 从 EIDEProject.ts 下沉而来。
  *
  * 为什么单独成模块: 这类原先住在上帝文件 \`EIDEProject.ts\` 里, 而配置模块
- * \`EIDETypeDefine.ts\` 需要反向 import 它(值, 非类型) —— 于是形成
+ * \`EIDETypeDefine__SEEN____SEEN____SEEN____SEEN____SEEN____SEEN____SEEN____SEEN____SEEN__.ts\` 需要反向 import 它(值, 非类型) —— 于是形成
  * \`EIDEProject ↔ EIDETypeDefine\` 的运行时环。下沉后:
  *   - 本模块对本仓模块**只有 type-only 依赖**(AbstractProject 仅作类型, 类内无静态调用)
  *   - EIDEProject.ts 保留 \`export { VirtualSource } from './VirtualSource'\` 兼容既有引用点

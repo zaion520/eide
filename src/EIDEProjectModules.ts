@@ -9,32 +9,7 @@ import * as child_process from 'child_process';
 
 import { File } from "../lib/node-utility/File";
 import {
-    view_str$compile$storageLayout,
-    view_str$compile$useCustomScatterFile, view_str$compile$scatterFilePath, view_str$compile$scatterFilePath_mdk,
-    view_str$compile$floatingPointHardware, view_str$compile$cpuType, view_str$compile$deprecated,
-    view_str$compile$options,
-    view_str$flasher$binPath,
-    view_str$flasher$eepromPath,
-    view_str$flasher$options,
-    view_str$flasher$interfaceType,
-    view_str$flasher$cpuName,
-    view_str$flasher$downloadSpeed,
-    view_str$flasher$baseAddr,
-    view_str$flasher$optionBytesPath,
-    view_str$flasher$launchApp,
-    view_str$flasher$targetName,
-    view_str$flasher$flashCommandLine,
-    view_str$flasher$eraseChipCommandLine,
-    view_str$flasher$openocd_target_cfg,
-    view_str$flasher$openocd_interface_cfg,
-    view_str$flasher$optionBytesConfig,
-    view_str$flasher$external_loader,
-    view_str$flasher$resetMode,
-    view_str$flasher$other_cmds,
-    view_str$flasher$stcgalOptions,
-    view_str$flasher$unlockChipCommand,
-    view_str$compile$archExtensions,
-    view_str$flasher$eraseAll
+    view_str$compile$storageLayout, view_str$compile$useCustomScatterFile, view_str$compile$scatterFilePath, view_str$compile$scatterFilePath_mdk, view_str$compile$floatingPointHardware, view_str$compile$cpuType, view_str$compile$deprecated, view_str$compile$options, view_str$flasher$binPath, view_str$flasher$eepromPath, view_str$flasher$options, view_str$flasher$interfaceType, view_str$flasher$cpuName, view_str$flasher$downloadSpeed, view_str$flasher$baseAddr, view_str$flasher$optionBytesPath, view_str$flasher$launchApp, view_str$flasher$targetName, view_str$flasher$flashCommandLine, view_str$flasher$eraseChipCommandLine, view_str$flasher$openocd_target_cfg, view_str$flasher$openocd_interface_cfg, view_str$flasher$optionBytesConfig, view_str$flasher$external_loader, view_str$flasher$resetMode, view_str$flasher$other_cmds, view_str$flasher$stcgalOptions, view_str$flasher$unlockChipCommand, view_str$compile$archExtensions, view_str$flasher$eraseAll
 } from "./StringTable";
 import { ResManager } from "./ResManager";
 import { ArrayDelRepetition } from "../lib/node-utility/Utility";
@@ -50,10 +25,8 @@ import { WorkspaceManager } from "./WorkspaceManager";
 import * as utility from './utility';
 import * as ArmCpuUtils from './ArmCpuUtils';
 import {
-    BuilderOptions,
-    ProjectConfiguration,
-    ProjectConfigData, BuilderConfigData, ProjectBaseApi
-} from './EIDETypeDefine';
+    BuilderOptions, ProjectConfigData, BuilderConfigData, ProjectBaseApi } from './EIDETypeDefine';
+import { ProjectConfiguration } from './ProjectConfiguration';
 
 export interface Memory {
     startAddr: string;

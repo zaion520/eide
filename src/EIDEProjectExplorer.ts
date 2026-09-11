@@ -40,10 +40,8 @@ import { AbstractProject, CheckError, DataChangeType, VirtualSource, SourceFileO
 import { ToolchainManager } from './ToolchainManager';
 import type { ToolchainName } from './types/ToolchainTypes';
 import {
-    BuilderOptions,
-    CreateOptions, VirtualFolder, VirtualFile, ImportOptions,
-    ProjectTargetInfo, ProjectConfigData, ProjectType, ProjectConfiguration, ProjectBaseApi
-} from './EIDETypeDefine';
+    BuilderOptions, CreateOptions, VirtualFolder, VirtualFile, ImportOptions, ProjectTargetInfo, ProjectConfigData, ProjectType, ProjectBaseApi } from './EIDETypeDefine';
+import { ProjectConfiguration } from './ProjectConfiguration';
 import { applyTargetToConfigData, makeTargetInfo, formatBuildAllSummary, BuildTargetResult } from './TargetManager';
 import { BuildAllStatus } from './BuildAllStatus';
 import {

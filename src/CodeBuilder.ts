@@ -34,7 +34,8 @@ import * as mathjs from 'mathjs';
 import type { AbstractProject } from './EIDEProject';
 import { ResManager } from "./ResManager";
 import { File } from "../lib/node-utility/File";
-import { BuilderOptions, ProjectConfigData, ProjectConfiguration } from "./EIDETypeDefine";
+import { BuilderOptions, ProjectConfigData } from './EIDETypeDefine';
+import { ProjectConfiguration } from './ProjectConfiguration';
 import {
     ArmBaseCompileData,
     Memory, ARMStorageLayout,

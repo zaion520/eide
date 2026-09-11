@@ -31,9 +31,7 @@ import * as os from 'os';
 import * as yaml from 'yaml';
 import * as child_process from 'child_process';
 
-import {
-    CppToolsApi, Version, CustomConfigurationProvider, getCppToolsApi,
-    SourceFileConfigurationItem, WorkspaceBrowseConfiguration
+import { CppToolsApi, Version, CustomConfigurationProvider, getCppToolsApi, SourceFileConfigurationItem, WorkspaceBrowseConfiguration
 } from 'vscode-cpptools';
 
 import { File } from '../lib/node-utility/File';
@@ -48,12 +46,8 @@ import { KeilParser } from './KeilXmlParser';
 import { ResManager } from './ResManager';
 import { SevenZipper, SevenZipUnzipExcludeList } from './Compress';
 import {
-    BuilderOptions,
-    ConfigMap, FileGroup,
-    ProjectConfiguration, ProjectConfigData, WorkspaceConfiguration,
-    CreateOptions,
-    ProjectConfigEvent, ProjectFileGroup, FileItem, EIDE_CONF_VERSION, ProjectTargetInfo, VirtualFolder, VirtualFile, CppConfigItem, ProjectBaseApi, ProjectType, BuilderConfigData, MAPPED_KEYS_IN_TARGET_INFO
-} from './EIDETypeDefine';
+    BuilderOptions, FileGroup, ProjectConfigData, CreateOptions, ProjectConfigEvent, ProjectFileGroup, FileItem, EIDE_CONF_VERSION, ProjectTargetInfo, VirtualFolder, VirtualFile, CppConfigItem, ProjectBaseApi, ProjectType, BuilderConfigData, MAPPED_KEYS_IN_TARGET_INFO } from './EIDETypeDefine';
+import { ConfigMap, ProjectConfiguration, WorkspaceConfiguration } from './ProjectConfiguration';
 import { IToolchian, ToolchainManager } from './ToolchainManager';
 import type { ToolchainName } from './types/ToolchainTypes';
 import { GlobalEvent } from './GlobalEvents';

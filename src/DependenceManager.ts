@@ -29,9 +29,10 @@ import * as NodePath from 'path';
 import { File } from '../lib/node-utility/File';
 import { DeleteDir, DeleteAllChildren } from './Platform';
 import {
-    ProjectConfiguration, Dependence,
+    Dependence,
     DependenceGroup, ProjectType, ManagerInterface
 } from './EIDETypeDefine';
+import { ProjectConfiguration } from './ProjectConfiguration';
 import { Component, ComponentFileItem } from './EIDEProjectModules';
 import { GlobalEvent } from './GlobalEvents';
 import { SettingManager } from './SettingManager';
