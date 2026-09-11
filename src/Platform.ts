@@ -31,6 +31,7 @@ import * as fs from 'fs';
 import { File } from '../lib/node-utility/File';
 import { FileWatcher } from '../lib/node-utility/FileWatcher';
 import { ERROR } from './StringTable';
+import { cachedRealpathSync } from './RealpathCache';
 
 export const UUID_NULL = 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF';
 
@@ -330,11 +331,8 @@ export function kill(pid: number): boolean {
 }
 
 export function realpathSync(path: string): string {
-    try {
-        return fs.realpathSync(path);
-    } catch (error) {
-        return path;
-    }
+    // P1-3: 委托给带会话内缓存的原语(语义一致: 失败回退原路径且不缓存)
+    return cachedRealpathSync(path);
 }
 
 /*

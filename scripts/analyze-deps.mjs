@@ -417,7 +417,7 @@ const FLAG_UPDATE_BASELINE = argv.includes('--update-baseline');
 const BASELINE_PATH = path.join(process.cwd(), 'scripts', 'dep-baseline.json');
 
 /** 叶子模块: 应保持零运行时入边(只允许 type-only 引用与 lib/) */
-const LEAF_FILES = ['src/types/', 'src/ProjectConsts.ts', 'src/ArmCpuUtils.ts'];
+const LEAF_FILES = ['src/types/', 'src/ProjectConsts.ts', 'src/ArmCpuUtils.ts', 'src/ConfigModelUi.ts', 'src/RealpathCache.ts'];
 const isLeafFile = (f) => LEAF_FILES.some(p => p.endsWith('/') ? f.startsWith(p) : f === p);
 const VSCODE_RE = /from\s+['"]vscode['"]/;
 /** 剔除 `import type ... from '...';` 语句 —— 纯类型导入不构成运行时依赖, 不计入 vscode 白名单 */
