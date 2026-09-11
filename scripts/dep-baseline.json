@@ -7,6 +7,7 @@
     "src/EIDEProject.ts",
     "src/EIDEProjectExplorer.ts",
     "src/EIDEProjectModules.ts",
+    "src/ExplorerYamlModifiers.ts",
     "src/HexUploader.ts",
     "src/MCPServer.ts",
     "src/OperationExplorer.ts",

@@ -1,3 +1,5 @@
+import type { VirtualFile, VirtualFolder } from '../EIDETypeDefine';
+
 
 export enum TreeItemType {
     SOLUTION,
@@ -61,4 +63,15 @@ export enum TreeItemType {
     RELOAD_ROOT,
     RELOAD_YES_ITEM,
     RELOAD_NO_ITEM
+}
+
+// ---- 虚拟目录信息(原在 EIDEProjectExplorer.ts, 下沉以避免拆分出的模块反向依赖宿主) ----
+export interface VirtualFolderInfo {
+    path: string;
+    vFolder: VirtualFolder;
+}
+
+export interface VirtualFileInfo {
+    path: string;       // virtual path
+    vFile: VirtualFile; // virtual file info
 }
