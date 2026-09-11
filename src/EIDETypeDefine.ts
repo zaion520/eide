@@ -91,7 +91,7 @@ export interface BuilderOptions {
 // 需要保证一些键位于json对象的根下,因此需要将这些键从 targets 复制到上一层,
 // 对比 ProjectTargetInfo 与 ProjectConfigData 相同的键,这些键如下:
 // (同步逻辑统一收敛在 TargetManager 中,此处仅保持原导入路径兼容)
-export { MAPPED_KEYS_IN_TARGET_INFO } from './TargetManager';
+export { MAPPED_KEYS_IN_TARGET_INFO } from './ProjectConsts';
 export interface ProjectTargetInfo {
     excludeList: string[];
     toolchain: ToolchainName;

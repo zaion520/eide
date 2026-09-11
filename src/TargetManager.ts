@@ -22,16 +22,8 @@ import type { HexUploaderType } from './types/UploadTypes';
 
 // 备注:对比 ProjectTargetInfo 与 ProjectConfigData 相同的键,
 // 这些键需要在运行时从 targets 复制到配置根节点(历史遗留的平铺结构)。
-export const MAPPED_KEYS_IN_TARGET_INFO = [
-    'excludeList',
-    'toolchain',
-    'toolchainConfig',
-    'toolchainConfigMap',
-    'uploader',
-    'uploadConfig',
-    'uploadConfigMap',
-    'cppPreprocessAttrs',
-];
+import { MAPPED_KEYS_IN_TARGET_INFO } from './ProjectConsts';
+export { MAPPED_KEYS_IN_TARGET_INFO };
 
 export const TARGET_NAME_MAX_LENGTH = 25;
 

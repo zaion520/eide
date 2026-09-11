@@ -62,3 +62,15 @@ export const EXCL_KEYS_IN_EIDE_JSON = [
     'uploadConfig',
     'uploadConfigMap'
 ];
+
+/** 需要从 targets 复制到配置根节点的键(历史遗留平铺结构)。原在 TargetManager.ts, 下沉到叶子以断边 */
+export const MAPPED_KEYS_IN_TARGET_INFO = [
+    'excludeList',
+    'toolchain',
+    'toolchainConfig',
+    'toolchainConfigMap',
+    'uploader',
+    'uploadConfig',
+    'uploadConfigMap',
+    'cppPreprocessAttrs',
+];

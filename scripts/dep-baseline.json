@@ -1,6 +1,6 @@
 {
   "runtimeSccEdges": 0,
-  "typeSccEdges": 43,
+  "typeSccEdges": 41,
   "vscodeImporters": [
     "src/BuildAllStatus.ts",
     "src/CodeBuilder.ts",
