@@ -39,7 +39,7 @@ import {
 import { File } from '../lib/node-utility/File';
 import { FileWatcher } from '../lib/node-utility/FileWatcher';
 import { RefreshStateMachine, RefreshState } from './RefreshStateMachine';
-import { EIDE_DIR as EIDE_DIR_CONST, HEADER_FILE_FILTER } from './ProjectConsts';
+import { EIDE_DIR as EIDE_DIR_CONST, HEADER_FILE_FILTER, CPP_FILE_FILTER, LIB_FILE_FILTER, ASM_FILE_FILTER } from './ProjectConsts';
 import { TargetManager, TargetManagerHost, TargetEventType, TargetSnapshotContext, TargetRestoreContext, TargetSwitchResult } from './TargetManager';
 import { getTargetLibsFileName, getTargetOptionBytesFileName, removeIniSection, renameIniSection, copyIniSection } from './TargetSidecars';
 import { updateClangdIntegration } from './clangdIntegration';
@@ -103,7 +103,7 @@ export interface CheckResult {
 
 //==========================================
 
-interface SourceProvider {
+export interface SourceProvider {
 
     getFileGroups(): FileGroup[];
 
@@ -129,277 +129,10 @@ interface SourceRootInfo extends FolderInfo {
     refreshTimeout?: NodeJS.Timeout;
 }
 
-type SourceChangedEvent = 'folderChanged' | 'dataChanged' | 'fileStatusChanged' | 'folderStatusChanged';
+export type SourceChangedEvent = 'folderChanged' | 'dataChanged' | 'fileStatusChanged' | 'folderStatusChanged';
 
-export class VirtualSource implements SourceProvider {
-
-    public static rootName = '<virtual_root>';
-
-    private project: AbstractProject;
-    private config: ProjectConfigData<any>;
-    private _event: events.EventEmitter;
-
-    on(event: 'dataChanged', listener: (event: SourceChangedEvent) => void): void;
-    on(event: any, listener: (arg: any) => void): void {
-        this._event.on(event, listener);
-    }
-
-    private emit(event: 'dataChanged', e: SourceChangedEvent): void;
-    private emit(event: any, arg?: any): void {
-        this._event.emit(event, arg);
-    }
-
-    constructor(prj: AbstractProject) {
-        this.project = prj;
-        this.config = <any>null;
-        this._event = new events.EventEmitter();
-    }
-
-    public static isVirtualPath(path: string): boolean {
-        return path.startsWith(VirtualSource.rootName);
-    }
-
-    public static toAbsPath(...paths: string[]): string {
-        if (paths.length == 0) return VirtualSource.rootName;
-        return VirtualSource.rootName + '/' + paths.join('/');
-    }
-
-    public getRoot(): VirtualFolder {
-        return this.config.virtualFolder;
-    }
-
-    private getFolderByName(vFolder: VirtualFolder, name: string): VirtualFolder | undefined {
-        for (const folder of vFolder.folders) {
-            if (folder.name === name) {
-                return folder;
-            }
-        }
-    }
-
-    traverse(func: (folderInfo: { path: string, folder: VirtualFolder }) => void) {
-
-        const folderStack: { path: string, folder: VirtualFolder }[] = [];
-
-        // put root folders
-        const rootFolder = this.getFolder();
-        if (rootFolder) {
-            folderStack.push({
-                path: rootFolder.name,
-                folder: rootFolder
-            });
-        }
-
-        let curFolder: { path: string, folder: VirtualFolder };
-
-        while (folderStack.length > 0) {
-            curFolder = <any>folderStack.pop();
-            func(curFolder);
-            for (const vFolder of curFolder.folder.folders) {
-                folderStack.push({
-                    path: `${curFolder.path}/${vFolder.name}`,
-                    folder: vFolder
-                });
-            }
-        }
-    }
-
-    // load
-
-    load(notEmitEvt?: boolean) {
-        this.config = this.project.GetConfiguration().config;
-        // refresh all
-        if (!notEmitEvt) { this.forceUpdateAllFolders(); }
-    }
-
-    // get
-
-    getFolder(vpath?: string): VirtualFolder | undefined {
-        if (vpath === undefined || vpath === VirtualSource.rootName) {
-            return this.getRoot();
-        } else {
-            const nameList = vpath.split('/');
-            let cur_folder: VirtualFolder = {
-                name: '/',
-                files: [],
-                folders: [this.getRoot()]
-            };
-            for (const name of nameList) {
-                const next = this.getFolderByName(cur_folder, name);
-                if (next) {
-                    cur_folder = next;
-                } else {
-                    return undefined;
-                }
-            }
-            return cur_folder;
-        }
-    }
-
-    getFile(vpath: string): VirtualFile | undefined {
-        const vFolder = this.getFolder(NodePath.dirname(vpath));
-        if (vFolder) {
-            const fileName = NodePath.basename(vpath);
-            const index = vFolder.files.findIndex((file) => NodePath.basename(file.path) == fileName);
-            if (index !== -1) {
-                return vFolder.files[index];
-            }
-        }
-    }
-
-    // implement
-
-    getFileGroups(): FileGroup[] {
-
-        const result: FileGroup[] = [];
-
-        this.traverse((folderInfo) => {
-            result.push({
-                name: folderInfo.path,
-                disabled: this.project.isExcluded(folderInfo.path) || undefined,
-                files: folderInfo.folder.files.map((vFile) => {
-                    const file = new File(this.project.ToAbsolutePath(vFile.path));
-                    const vFilePath = `${folderInfo.path}/${file.name}`;
-                    return {
-                        file: file,
-                        disabled: this.project.isExcluded(vFilePath) || undefined
-                    };
-                })
-            });
-        });
-
-        return result;
-    }
-
-    notifyUpdateFile(virtualPath: string): void {
-
-        if (!virtualPath.startsWith(VirtualSource.rootName)) {
-            return; // if it's not a virtual file, exit
-        }
-
-        this.emit('dataChanged', 'fileStatusChanged');
-    }
-
-    notifyUpdateFolder(virtualPath: string): void {
-
-        if (!virtualPath.startsWith(VirtualSource.rootName)) {
-            return; // if it's not a virtual folder, exit
-        }
-
-        const vFolder = this.getFolder(virtualPath);
-        if (vFolder) {
-            this.emit('dataChanged', 'folderStatusChanged');
-        }
-    }
-
-    forceUpdateAllFolders(): void {
-        this.emit('dataChanged', 'folderStatusChanged');
-    }
-
-    // set
-
-    addFile(vfolder_path: string, fspath: string): VirtualFile | undefined {
-        const folder = this.getFolder(vfolder_path);
-        if (folder) {
-            const vFilePath = `${vfolder_path}/${NodePath.basename(fspath)}`;
-            if (this.getFile(vFilePath) === undefined) { // file is not existed, add it
-                const vFile: VirtualFile = { path: this.project.toRelativePath(fspath) };
-                folder.files.push(vFile);
-                this.emit('dataChanged', 'folderChanged');
-                return vFile;
-            }
-        }
-    }
-
-    addFiles(folder_path: string, pathList: string[]): VirtualFile[] | undefined {
-
-        const folder = this.getFolder(folder_path);
-        if (folder) {
-
-            const doneList: VirtualFile[] = [];
-
-            for (const abspath of pathList) {
-                const vFilePath = `${folder_path}/${NodePath.basename(abspath)}`;
-                if (this.getFile(vFilePath) === undefined) { // file is not existed, add it
-                    const vFile: VirtualFile = { path: this.project.toRelativePath(abspath) };
-                    folder.files.push(vFile);
-                    doneList.push(vFile);
-                }
-            }
-
-            if (doneList.length > 0) {
-                this.emit('dataChanged', 'folderChanged');
-            }
-
-            return doneList;
-        }
-    }
-
-    removeFile(vpath: string): VirtualFile | undefined {
-        const basename = NodePath.basename(vpath);
-        const vFolder = this.getFolder(NodePath.dirname(vpath));
-        if (vFolder) {
-            const index = vFolder.files.findIndex((f) => NodePath.basename(f.path) == basename);
-            if (index !== -1) {
-                const rmFile = vFolder.files.splice(index, 1)[0];
-                this.emit('dataChanged', 'folderChanged');
-                return rmFile;
-            }
-        }
-    }
-
-    addFolder(name: string, parent_path?: string): VirtualFolder | undefined {
-        const vFolder = this.getFolder(parent_path);
-        if (vFolder) {
-            const index = vFolder.folders.findIndex((f) => { return f.name === name; });
-            if (index === -1) {
-                //const vFolderPath = `${parent_path || VirtualSource.rootName}/${name}`;
-                const nFolder: VirtualFolder = { name: name, files: [], folders: [] };
-                vFolder.folders.push(nFolder);
-                this.emit('dataChanged', 'folderChanged');
-                return nFolder;
-            }
-        }
-    }
-
-    insertFolder(parentvPath: string, nFolder: VirtualFolder): string | undefined {
-        const vFolder = this.getFolder(parentvPath);
-        if (vFolder) {
-            const index = vFolder.folders.findIndex((f) => f.name == nFolder.name);
-            if (index === -1) {
-                vFolder.folders.push(nFolder);
-                this.emit('dataChanged', 'folderChanged');
-                return `${parentvPath}/${nFolder.name}`;
-            }
-        }
-    }
-
-    removeFolder(path: string): VirtualFolder | undefined {
-        const name = NodePath.basename(path);
-        const vFolder = this.getFolder(NodePath.dirname(path));
-        if (vFolder) {
-            const index = vFolder.folders
-                .findIndex((f) => { return f.name === name; });
-            if (index !== -1) {
-                const rmFolder = vFolder.folders.splice(index, 1)[0];
-                this.emit('dataChanged', 'folderChanged');
-                return rmFolder;
-            }
-        }
-    }
-
-    isFolder(path: string): boolean {
-        return this.getFolder(path) !== undefined;
-    }
-
-    renameFolder(vpath: string, newName: string): VirtualFolder | undefined {
-        const vFolder = this.getFolder(vpath);
-        if (vFolder) {
-            vFolder.name = newName;
-            this.emit('dataChanged', 'folderChanged');
-            return vFolder;
-        }
-    }
-}
+import { VirtualSource } from './VirtualSource';
+export { VirtualSource };
 
 class SourceRootList implements SourceProvider {
 
@@ -845,9 +578,9 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
     // avaliable source files
     /** 头文件后缀匹配(值定义在零依赖的 ProjectConsts, 同上) */
     static readonly headerFilter: RegExp = HEADER_FILE_FILTER;
-    static readonly cppfileFilter: RegExp = /\.(?:c|cpp|c\+\+|cc|cxx)$/i;
-    static readonly libFileFilter: RegExp = /\.(?:lib|a|o|obj)$/i;
-    static readonly asmfileFilter: RegExp = /\.(?:s|asm|a51)$/i;
+    static readonly cppfileFilter: RegExp = CPP_FILE_FILTER;
+    static readonly libFileFilter: RegExp = LIB_FILE_FILTER;
+    static readonly asmfileFilter: RegExp = ASM_FILE_FILTER;
 
     // this folder list will be excluded when search include path
     static readonly excludeIncSearchList: string[] = [];

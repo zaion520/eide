@@ -43,7 +43,7 @@ import { GlobalEvent } from "./GlobalEvents";
 import { ExceptionToMessage, newMessage } from "./Message";
 import { ToolchainName } from './ToolchainManager';
 import { HexUploaderType } from "./HexUploader";
-import { VirtualSource } from "./EIDEProject";
+import { VirtualSource } from "./VirtualSource";
 import * as utility from './utility';
 import { snapshotCurrentTarget, recoverTargetToRoot } from './TargetManager';
 import {

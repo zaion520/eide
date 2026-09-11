@@ -26,7 +26,9 @@ import * as xml2js from 'x2js';
 import { File } from '../lib/node-utility/File';
 import { BuilderOptions, ProjectType, FileGroup, ProjectConfiguration } from './EIDETypeDefine';
 import { ToolchainName, ToolchainManager } from './ToolchainManager';
-import { AbstractProject, VirtualSource } from './EIDEProject';
+import type { AbstractProject } from './EIDEProject';
+import { VirtualSource } from './VirtualSource';
+import { CPP_FILE_FILTER, LIB_FILE_FILTER, ASM_FILE_FILTER } from './ProjectConsts';
 import { GlobalEvent } from './GlobalEvents';
 import { ExceptionToMessage } from './Message';
 import { ResManager } from './ResManager';
@@ -199,18 +201,18 @@ export abstract class KeilParser<T> {
 
     protected getFileType(f: File): number {
 
-        if (AbstractProject.cppfileFilter.test(f.name)) {
+        if (CPP_FILE_FILTER.test(f.name)) {
             if (f.suffix.toLowerCase() == '.c')
                 return 1;
             else
                 return 8;
         }
 
-        else if (AbstractProject.asmfileFilter.test(f.name)) {
+        else if (ASM_FILE_FILTER.test(f.name)) {
             return 2;
         }
 
-        else if (AbstractProject.libFileFilter.test(f.name)) {
+        else if (LIB_FILE_FILTER.test(f.name)) {
             return 4;
         }
 

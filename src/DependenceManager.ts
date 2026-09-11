@@ -36,7 +36,8 @@ import { Component, ComponentFileItem } from './EIDEProjectModules';
 import { GlobalEvent } from './GlobalEvents';
 import { SettingManager } from './SettingManager';
 import { ExceptionToMessage } from './Message';
-import { AbstractProject, VirtualSource } from './EIDEProject';
+import type { AbstractProject } from './EIDEProject';
+import { VirtualSource } from './VirtualSource';
 import { ArrayDelRepetition } from '../lib/node-utility/Utility';
 
 export class DependenceManager implements ManagerInterface {

@@ -38,3 +38,12 @@ export const EIDE_DIR = '.eide';
 
 /** 头文件后缀匹配(用于"哪些文件算头文件"的统一判定) */
 export const HEADER_FILE_FILTER: RegExp = /\.(?:h|hxx|hpp|inc)$/i;
+
+/** C/C++ 源文件后缀匹配(值原属 AbstractProject.cppfileFilter) */
+export const CPP_FILE_FILTER: RegExp = /\.(?:c|cpp|c\+\+|cc|cxx)$/i;
+
+/** 库/目标文件后缀匹配(值原属 AbstractProject.libFileFilter) */
+export const LIB_FILE_FILTER: RegExp = /\.(?:lib|a|o|obj)$/i;
+
+/** 汇编源文件后缀匹配(值原属 AbstractProject.asmfileFilter) */
+export const ASM_FILE_FILTER: RegExp = /\.(?:s|asm|a51)$/i;

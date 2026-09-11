@@ -31,7 +31,7 @@ import * as os from 'os';
 import * as child_process from 'child_process';
 import * as mathjs from 'mathjs';
 
-import { AbstractProject, VirtualSource } from "./EIDEProject";
+import type { AbstractProject } from './EIDEProject';
 import { ResManager } from "./ResManager";
 import { File } from "../lib/node-utility/File";
 import { BuilderOptions, ProjectConfigData, ProjectConfiguration } from "./EIDETypeDefine";
