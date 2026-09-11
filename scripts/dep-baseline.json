@@ -7,7 +7,6 @@
     "src/DebugConfigGenerator.ts",
     "src/EIDEProject.ts",
     "src/EIDEProjectExplorer.ts",
-    "src/EIDEProjectModules.ts",
     "src/ExplorerSmallItems.ts",
     "src/ExplorerYamlModifiers.ts",
     "src/HexUploader.ts",

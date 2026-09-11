@@ -2,7 +2,8 @@
 import * as events from 'events';
 import * as os from 'os';
 import * as fs from 'fs';
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
+import { getConfigModelUiAdapter } from './ConfigModelUi';
 import * as NodePath from 'path';
 import { jsonc } from 'jsonc';
 import * as child_process from 'child_process';
@@ -240,7 +241,7 @@ export abstract class ConfigModel<DataType> {
             case 'INPUT':
             case 'INPUT_INTEGER':
                 {
-                    const val = await vscode.window.showInputBox({
+                    const val = await getConfigModelUiAdapter().showInputBox({
                         value: (<any>this.data)[key],
                         ignoreFocusOut: true,
                         validateInput: (input: string): string | undefined => {
@@ -269,7 +270,7 @@ export abstract class ConfigModel<DataType> {
                 {
                     const itemList = selections || this.GetSelectionList(key) || [];
 
-                    const pickItems = await vscode.window.showQuickPick(itemList, {
+                    const pickItems = await getConfigModelUiAdapter().showQuickPick(itemList, {
                         canPickMany: this.canSelectMany(key),
                         matchOnDescription: true,
                         placeHolder: `found ${itemList.length} results`
@@ -286,8 +287,9 @@ export abstract class ConfigModel<DataType> {
                 break;
             case 'OPEN_FILE':
                 {
-                    const uri = await vscode.window.showOpenDialog({
-                        defaultUri: vscode.Uri.file(prjRootDir.path),
+                    const ui = getConfigModelUiAdapter();
+                    const uri = await ui.showOpenDialog({
+                        defaultUri: ui.fileUri(prjRootDir.path),
                         filters: this.GetOpenFileFilters(key) || { '*.*': ['*'] },
                         canSelectFiles: true,
                         canSelectMany: this.canSelectMany(key)
@@ -840,7 +842,7 @@ export abstract class ArmBaseCompileConfigModel
                     if (name.startsWith(this.DIV_TAG)) {
                         res.push({
                             label: name.replace(this.DIV_TAG, ''),
-                            kind: vscode.QuickPickItemKind.Separator
+                            kind: getConfigModelUiAdapter().quickPickItemKindSeparator
                         });
                     } else {
                         if (ArmCpuUtils.isArmArchName(name)) { // for arch

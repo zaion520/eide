@@ -121,7 +121,9 @@ function buildGraph(files) {
             const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
 
             if (raw === 'vscode') {
-                vscodeImporters.push({ file: f, line });
+                // import type ... from 'vscode' 是纯类型引用(编译后消失), 不算运行时 UI 依赖
+                const isTypeOnlyImport = isImport && stmt.importClause && stmt.importClause.isTypeOnly;
+                if (!isTypeOnlyImport) { vscodeImporters.push({ file: f, line }); }
                 continue;
             }
             if (!raw.startsWith('.')) { continue; }
@@ -418,6 +420,8 @@ const BASELINE_PATH = path.join(process.cwd(), 'scripts', 'dep-baseline.json');
 const LEAF_FILES = ['src/types/', 'src/ProjectConsts.ts', 'src/ArmCpuUtils.ts'];
 const isLeafFile = (f) => LEAF_FILES.some(p => p.endsWith('/') ? f.startsWith(p) : f === p);
 const VSCODE_RE = /from\s+['"]vscode['"]/;
+/** 剔除 `import type ... from '...';` 语句 —— 纯类型导入不构成运行时依赖, 不计入 vscode 白名单 */
+const STRIP_TYPE_IMPORT_RE = /import\s+type\s+[^;'"]*from\s+['"][^'"]+['"]\s*;?/g;
 
 function innerEdgeCount(comps, g) {
     let n = 0;
@@ -430,7 +434,9 @@ function innerEdgeCount(comps, g) {
     return n;
 }
 
-const vscodeFileList = files.filter(f => VSCODE_RE.test(fs.readFileSync(f, 'utf8'))).sort();
+const vscodeFileList = files
+    .filter(f => VSCODE_RE.test(fs.readFileSync(f, 'utf8').replace(STRIP_TYPE_IMPORT_RE, '')))
+    .sort();
 const leafRuntimeViolations = [];
 for (const f of files) {
     if (!isLeafFile(f)) { continue; }

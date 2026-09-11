@@ -31,6 +31,7 @@ import * as ChildProcess from 'child_process';
 import * as yaml from 'yaml';
 
 import { GlobalEvent } from './GlobalEvents';
+import { setConfigModelUiAdapter } from './ConfigModelUi';
 import { OperationExplorer } from './OperationExplorer';
 import { ProjectExplorer, ProjTreeItem } from './EIDEProjectExplorer';
 import { ResManager } from './ResManager';
@@ -72,6 +73,15 @@ export async function activate(context: vscode.ExtensionContext) {
     // init event emiter
     RegisterGlobalEvent();
     RegisterMsgListener();
+
+    // 组合根注入: ConfigModel 的 UI 适配器(P1-1 —— 领域模型不再直接依赖 vscode.window)
+    setConfigModelUiAdapter({
+        showInputBox: (options) => Promise.resolve(vscode.window.showInputBox(options)),
+        showQuickPick: (items, options) => Promise.resolve(vscode.window.showQuickPick(items, options)),
+        showOpenDialog: (options) => Promise.resolve(vscode.window.showOpenDialog(options)),
+        quickPickItemKindSeparator: vscode.QuickPickItemKind.Separator,
+        fileUri: (path) => vscode.Uri.file(path)
+    });
 
     GlobalEvent.log_info('Embedded IDE launch begin');
 
