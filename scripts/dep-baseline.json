@@ -1,0 +1,31 @@
+{
+  "runtimeSccEdges": 0,
+  "typeSccEdges": 43,
+  "vscodeImporters": [
+    "src/BuildAllStatus.ts",
+    "src/CodeBuilder.ts",
+    "src/EIDEProject.ts",
+    "src/EIDEProjectExplorer.ts",
+    "src/EIDEProjectModules.ts",
+    "src/HexUploader.ts",
+    "src/MCPServer.ts",
+    "src/OperationExplorer.ts",
+    "src/Platform.ts",
+    "src/ProblemMatcher.ts",
+    "src/ProjectConfiguration.ts",
+    "src/ResInstaller.ts",
+    "src/ResManager.ts",
+    "src/SettingManager.ts",
+    "src/SimpleUIDef.ts",
+    "src/StatusBarManager.ts",
+    "src/StringTable.ts",
+    "src/ToolchainLicenceActivate.ts",
+    "src/UiNotify.ts",
+    "src/VirtualDocsProvider.ts",
+    "src/WebPanelManager.ts",
+    "src/WorkspaceManager.ts",
+    "src/clangdIntegration.ts",
+    "src/extension.ts",
+    "src/utility.ts"
+  ]
+}

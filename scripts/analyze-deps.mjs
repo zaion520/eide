@@ -402,4 +402,90 @@ if (FLAG_EDGES && core.size) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// --enforce / --update-baseline: 分层约束门禁(打包前 / CI 跑)
+// ---------------------------------------------------------------------------
+// 规则:
+//   1. 运行时环内部边不得超过基线(目标恒为 0)
+//   2. 类型环内部边不得超过基线(只许降, 不许升)
+//   3. 直接 import vscode 的文件不得超出基线白名单(禁止新增)
+//   4. 叶子模块(src/types/**、ProjectConsts、ArmCpuUtils)不得有**运行时** src 依赖
+const FLAG_ENFORCE = argv.includes('--enforce');
+const FLAG_UPDATE_BASELINE = argv.includes('--update-baseline');
+const BASELINE_PATH = path.join(process.cwd(), 'scripts', 'dep-baseline.json');
+
+/** 叶子模块: 应保持零运行时入边(只允许 type-only 引用与 lib/) */
+const LEAF_FILES = ['src/types/', 'src/ProjectConsts.ts', 'src/ArmCpuUtils.ts'];
+const isLeafFile = (f) => LEAF_FILES.some(p => p.endsWith('/') ? f.startsWith(p) : f === p);
+const VSCODE_RE = /from\s+['"]vscode['"]/;
+
+function innerEdgeCount(comps, g) {
+    let n = 0;
+    for (const c of comps) {
+        const s = new Set(c);
+        for (const u of c) {
+            for (const e of (g.get(u) || [])) { if (s.has(e.to)) { n++; } }
+        }
+    }
+    return n;
+}
+
+const vscodeFileList = files.filter(f => VSCODE_RE.test(fs.readFileSync(f, 'utf8'))).sort();
+const leafRuntimeViolations = [];
+for (const f of files) {
+    if (!isLeafFile(f)) { continue; }
+    for (const e of (dep.get(f) || [])) {
+        if (!e.typeOnly && e.to.startsWith('src/')) { leafRuntimeViolations.push(f + ':' + e.line + ' -> ' + e.to); }
+    }
+}
+
+const gateState = {
+    runtimeSccEdges: innerEdgeCount(runtimeSccs, runtimeDep),
+    typeSccEdges: innerEdgeCount(sccs, dep),
+    vscodeImporters: vscodeFileList
+};
+
+console.log('');
+console.log('--- 门禁状态 ---');
+console.log('  运行时环内部边 : ' + gateState.runtimeSccEdges);
+console.log('  类型环内部边   : ' + gateState.typeSccEdges);
+console.log('  import vscode  : ' + gateState.vscodeImporters.length + ' 个文件');
+console.log('  叶子运行时违规 : ' + leafRuntimeViolations.length);
+
+if (FLAG_UPDATE_BASELINE) {
+    fs.writeFileSync(BASELINE_PATH, JSON.stringify(gateState, null, 2) + '\n', 'utf8');
+    console.log('  → 基线已写入 ' + path.relative(process.cwd(), BASELINE_PATH));
+}
+
+if (FLAG_ENFORCE) {
+    let base = null;
+    try { base = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')); } catch (e) { /* 缺失下面报错 */ }
+    if (!base) {
+        console.error('  找不到基线文件 ' + BASELINE_PATH + ', 先执行 --update-baseline');
+        process.exitCode = 2;
+    } else {
+        const bad = [];
+        if (gateState.runtimeSccEdges > base.runtimeSccEdges) {
+            bad.push('运行时环内部边 ' + base.runtimeSccEdges + ' -> ' + gateState.runtimeSccEdges);
+        }
+        if (gateState.typeSccEdges > base.typeSccEdges) {
+            bad.push('类型环内部边 ' + base.typeSccEdges + ' -> ' + gateState.typeSccEdges);
+        }
+        const newVscode = gateState.vscodeImporters.filter(f => base.vscodeImporters.indexOf(f) < 0);
+        if (newVscode.length) { bad.push('新增 import vscode: ' + newVscode.join(', ')); }
+        if (leafRuntimeViolations.length) { bad.push('叶子模块出现运行时 src 依赖: ' + leafRuntimeViolations.join(', ')); }
+
+        console.log('');
+        if (bad.length) {
+            console.log('❌ 门禁未通过:');
+            for (const b of bad) { console.log('   - ' + b); }
+            process.exitCode = 1;
+        } else {
+            console.log('✅ 门禁通过 (运行时环=' + gateState.runtimeSccEdges
+                + ', 类型环边=' + gateState.typeSccEdges
+                + ', vscode=' + gateState.vscodeImporters.length + ')');
+        }
+    }
+}
+
 console.log('');
