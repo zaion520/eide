@@ -32,3 +32,9 @@
  */
 
 export type HexUploaderType = 'JLink' | 'STVP' | 'STLink' | 'stcgal' | 'pyOCD' | 'OpenOCD' | 'probe-rs' | 'Custom';
+
+/** CPU 标识(供应商 + 型号)。原定义在 HexUploader.ts, 下沉到叶子类型层 */
+export interface CPUInfo {
+    vendor: string;
+    cpuName: string;
+}

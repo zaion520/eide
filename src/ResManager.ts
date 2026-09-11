@@ -35,8 +35,7 @@ import * as vscode from 'vscode';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import { CPUInfo } from "./HexUploader";
-import { AbstractProject } from "./EIDEProject";
+import type { CPUInfo } from './types/UploadTypes';
 import { SettingManager } from "./SettingManager";
 import * as utility from './utility'
 import { CmdLineHandler } from "./CmdLineHandler";

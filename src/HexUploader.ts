@@ -48,7 +48,7 @@ import { StatusBarManager } from "./StatusBarManager";
 
 let _mInstance: HexUploaderManager | undefined;
 
-import type { HexUploaderType } from './types/UploadTypes';
+import type { HexUploaderType, CPUInfo } from './types/UploadTypes';
 export type { HexUploaderType };
 
 export interface UploadOption {
@@ -390,10 +390,6 @@ export enum JLinkProtocolType {
     cJTAG = 7
 }
 
-export interface CPUInfo {
-    vendor: string;
-    cpuName: string;
-}
 
 export interface JLinkOptions extends UploadOption {
 
