@@ -49,7 +49,7 @@ import { CmdLineHandler } from "./CmdLineHandler";
 import { ArrayDelRepetition } from "../lib/node-utility/Utility";
 import { DependenceManager } from "./DependenceManager";
 import { WorkspaceManager } from "./WorkspaceManager";
-import { ToolchainName } from "./ToolchainManager";
+import type { ToolchainName } from './types/ToolchainTypes';
 import {
     md5, sha256, copyObject, generateRandomStr,
     isGccFamilyToolchain, compareVersion 

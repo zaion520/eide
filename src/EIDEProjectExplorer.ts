@@ -37,7 +37,8 @@ import { OperationLock, OpLockKeys } from './OperationLock';
 import { ResManager } from './ResManager';
 import { GlobalEvent } from './GlobalEvents';
 import { AbstractProject, CheckError, DataChangeType, VirtualSource, SourceFileOptions, EIDE_FILE_OPTION_VERSION } from './EIDEProject';
-import { ToolchainName, ToolchainManager } from './ToolchainManager';
+import { ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import {
     BuilderOptions,
     CreateOptions, VirtualFolder, VirtualFile, ImportOptions,
@@ -108,7 +109,8 @@ import {
 import { CodeBuilder, BuildOptions } from './CodeBuilder';
 import { ExceptionToMessage, newMessage } from './Message';
 import { SettingManager } from './SettingManager';
-import { FlashCommandResult, HexUploaderManager, HexUploaderType, JLinkOptions, JLinkProtocolType, OpenOCDFlashOptions, PyOCDFlashOptions } from './HexUploader';
+import { FlashCommandResult, HexUploaderManager, JLinkOptions, JLinkProtocolType, OpenOCDFlashOptions, PyOCDFlashOptions } from './HexUploader';
+import type { HexUploaderType } from './types/UploadTypes';
 import { SevenZipper, CompressOption } from './Compress';
 import { DependenceManager } from './DependenceManager';
 import { ArrayDelRepetition } from '../lib/node-utility/Utility';

@@ -39,7 +39,7 @@ import * as platform from './Platform';
 import { ExeCmd } from '../lib/node-utility/Executable';
 import { GlobalEvent } from './GlobalEvents';
 import { SettingManager } from './SettingManager';
-import { ToolchainName } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import { Time } from '../lib/node-utility/Time';
 
 export const TIME_ONE_MINUTE = 60 * 1000;

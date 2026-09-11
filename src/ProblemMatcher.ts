@@ -10,7 +10,7 @@ import { ProjectBaseApi } from './EIDETypeDefine';
 import { File } from '../lib/node-utility/File';
 import { GlobalEvent } from './GlobalEvents';
 import { ExceptionToMessage } from './Message';
-import { ToolchainName } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 
 function parseLogLines(file: File): string[] {
 

@@ -1,4 +1,5 @@
-import { ToolchainName, IToolchian, ToolchainManager } from "./ToolchainManager";
+import { IToolchian, ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import { GlobalEvent } from "./GlobalEvents";
 import { newMessage } from "./Message";
 import { view_str$prompt$requestAndActivateLicence_warn_setupPath, getLocalLanguageType, LanguageIndexs } from "./StringTable";

@@ -41,8 +41,8 @@ import {
 import { ArrayDelRepetition } from "../lib/node-utility/Utility";
 import { GlobalEvent } from "./GlobalEvents";
 import { ExceptionToMessage, newMessage } from "./Message";
-import { ToolchainName } from './ToolchainManager';
-import { HexUploaderType } from "./HexUploader";
+import type { ToolchainName } from './types/ToolchainTypes';
+import type { HexUploaderType } from './types/UploadTypes';
 import { VirtualSource } from "./VirtualSource";
 import * as utility from './utility';
 import { snapshotCurrentTarget, recoverTargetToRoot } from './TargetManager';

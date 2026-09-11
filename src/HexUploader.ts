@@ -30,7 +30,8 @@ import { SettingManager } from "./SettingManager";
 import { CmdLineHandler } from "./CmdLineHandler";
 import { gotoSet_text, view_str$download_software } from "./StringTable";
 import { EncodingConverter } from "./EncodingConverter";
-import { ToolchainName, ToolchainManager } from "./ToolchainManager";
+import { ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import { sendCommandToTerminal, deepCloneObject, probers_install } from './utility';
 import { WorkspaceManager } from "./WorkspaceManager";
 
@@ -47,7 +48,8 @@ import { StatusBarManager } from "./StatusBarManager";
 
 let _mInstance: HexUploaderManager | undefined;
 
-export type HexUploaderType = 'JLink' | 'STVP' | 'STLink' | 'stcgal' | 'pyOCD' | 'OpenOCD' | 'probe-rs' | 'Custom';
+import type { HexUploaderType } from './types/UploadTypes';
+export type { HexUploaderType };
 
 export interface UploadOption {
     // program file path

@@ -1504,7 +1504,8 @@ class EideTerminalProvider implements vscode.TerminalProfileProvider {
 //-------------------------------------------------
 
 import { FileWatcher } from '../lib/node-utility/FileWatcher';
-import { ToolchainManager, ToolchainName } from './ToolchainManager';
+import { ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import {
     JLinkOptions, JLinkProtocolType, OpenOCDFlashOptions, 
     PyOCDFlashOptions, STLinkOptions, ProbeRSFlashOptions, STVPFlasherOptions

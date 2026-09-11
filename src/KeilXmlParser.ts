@@ -25,7 +25,8 @@
 import * as xml2js from 'x2js';
 import { File } from '../lib/node-utility/File';
 import { BuilderOptions, ProjectType, FileGroup, ProjectConfiguration } from './EIDETypeDefine';
-import { ToolchainName, ToolchainManager } from './ToolchainManager';
+import { ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import type { AbstractProject } from './EIDEProject';
 import { VirtualSource } from './VirtualSource';
 import { CPP_FILE_FILTER, LIB_FILE_FILTER, ASM_FILE_FILTER } from './ProjectConsts';

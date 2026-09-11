@@ -24,7 +24,8 @@ import type { AbstractProject } from './EIDEProject';
 import { SettingManager } from './SettingManager';
 import { GlobalEvent } from './GlobalEvents';
 import { BuilderOptions } from './EIDETypeDefine';
-import { ToolchainManager, ToolchainName } from './ToolchainManager';
+import { ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import { collectExternalSourceRoots } from './ProjectRootTool';
 import {
     buildClangdCommandTokens,

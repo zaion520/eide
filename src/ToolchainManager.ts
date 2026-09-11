@@ -40,10 +40,8 @@ import * as ArmCpuUtils from "./ArmCpuUtils";
 import * as os from "os";
 
 //! 名称应该是大写，但由于历史因素，其中 'Keil_C51' 大小写暂时无法更正（避免旧的项目出现问题） 
-export type ToolchainName =
-    'GNU_SDCC_MCS51' | 'SDCC' | 'Keil_C51' | 'IAR_STM8' | 'GNU_SDCC_STM8' | 'COSMIC_STM8' |
-    'AC5' | 'AC6' | 'GCC' | 'IAR_ARM' |
-    'RISCV_GCC' | 'ANY_GCC' | 'MIPS_GCC' | 'MTI_GCC' | 'LLVM_ARM' | 'None';
+import type { ToolchainName } from './types/ToolchainTypes';
+export type { ToolchainName };
 
 export interface IProjectInfo {
 

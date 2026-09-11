@@ -34,7 +34,7 @@ import { ExceptionToMessage, newMessage } from './Message';
 import { notifyReloadWindow } from './UiNotify';
 import { find, exeSuffix, userhome, osType } from './Platform';
 import { WorkspaceManager } from './WorkspaceManager';
-import { ToolchainName } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import { view_str$prompt$needReloadToUpdateEnv, WARNING, view_str$prompt$needReload } from './StringTable';
 import { xpackRequireDevTools } from './XpackDevTools';
 

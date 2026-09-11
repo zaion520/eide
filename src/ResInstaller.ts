@@ -28,13 +28,13 @@ import * as fs from 'fs';
 import * as child_process from 'child_process';
 import * as NodePath from 'path';
 
-import { HexUploaderType } from "./HexUploader";
+import type { HexUploaderType } from './types/UploadTypes';
 import { SettingManager } from './SettingManager';
 import { txt_install_now, txt_jump2settings,
     view_str$prompt$install_tools_by_online,
     view_str$prompt$reload_workspace_to_refresh_env
 } from './StringTable';
-import { ToolchainName } from "./ToolchainManager";
+import type { ToolchainName } from './types/ToolchainTypes';
 import * as utility from './utility';
 import { File } from '../lib/node-utility/File';
 import { GlobalEvent } from './GlobalEvents';

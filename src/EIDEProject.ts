@@ -54,12 +54,13 @@ import {
     CreateOptions,
     ProjectConfigEvent, ProjectFileGroup, FileItem, EIDE_CONF_VERSION, ProjectTargetInfo, VirtualFolder, VirtualFile, CppConfigItem, ProjectBaseApi, ProjectType, BuilderConfigData, MAPPED_KEYS_IN_TARGET_INFO
 } from './EIDETypeDefine';
-import { ToolchainName, IToolchian, ToolchainManager } from './ToolchainManager';
+import { IToolchian, ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
 import { GlobalEvent } from './GlobalEvents';
 import { ArrayDelRepetition } from '../lib/node-utility/Utility';
 import { ExceptionToMessage, newMessage } from './Message';
 import { PackageManager, ComponentUpdateItem, ComponentUpdateType } from './PackageManager';
-import { HexUploaderType } from './HexUploader';
+import type { HexUploaderType } from './types/UploadTypes';
 import { WebPanelManager } from './WebPanelManager';
 import { DependenceManager } from './DependenceManager';
 import * as platform from './Platform';

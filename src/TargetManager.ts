@@ -17,8 +17,8 @@ import type {
     ProjectConfigData,
     ProjectTargetInfo,
 } from './EIDETypeDefine';
-import type { ToolchainName } from './ToolchainManager';
-import type { HexUploaderType } from './HexUploader';
+import type { ToolchainName } from './types/ToolchainTypes';
+import type { HexUploaderType } from './types/UploadTypes';
 
 // 备注:对比 ProjectTargetInfo 与 ProjectConfigData 相同的键,
 // 这些键需要在运行时从 targets 复制到配置根节点(历史遗留的平铺结构)。

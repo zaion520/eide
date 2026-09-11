@@ -40,14 +40,10 @@ import { ResManager } from "./ResManager";
 import { ArrayDelRepetition } from "../lib/node-utility/Utility";
 import { GlobalEvent } from "./GlobalEvents";
 import { ExceptionToMessage, newMessage } from "./Message";
-import { ToolchainName, IToolchian, ToolchainManager } from './ToolchainManager';
-import {
-    HexUploaderType, STLinkOptions, STVPFlasherOptions, 
-    StcgalFlashOption, JLinkOptions, JLinkProtocolType,
-    PyOCDFlashOptions, OpenOCDFlashOptions, STLinkProtocolType,
-    ProbeRSFlashOptions,
-    CustomFlashOptions 
-} from "./HexUploader";
+import { IToolchian, ToolchainManager } from './ToolchainManager';
+import type { ToolchainName } from './types/ToolchainTypes';
+import { STLinkOptions, STVPFlasherOptions, StcgalFlashOption, JLinkOptions, JLinkProtocolType, PyOCDFlashOptions, OpenOCDFlashOptions, STLinkProtocolType, ProbeRSFlashOptions, CustomFlashOptions } from './HexUploader';
+import type { HexUploaderType } from './types/UploadTypes';
 import { EIDE_DIR } from './ProjectConsts';
 import { SettingManager } from "./SettingManager";
 import { WorkspaceManager } from "./WorkspaceManager";
