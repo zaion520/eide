@@ -1,28 +1,49 @@
-import { AbstractProject, VirtualSource } from './EIDEProject';
+/*
+    MIT License
 
+    Copyright (c) 2019 github0null
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+*/
+
+/**
+ * YAML 配置修饰器: VFolder 源路径 / 项目属性 / 排除源文件。
+ *
+ * 从 EIDEProjectExplorer.ts(8753 行)拆出 —— 这三个类的 this. 只指向自身字段，
+ * 不依赖 ProjectExplorer 实例，是原文件里内聚度最高、最独立的一块。
+ *
+ */
+
+import type { AbstractProject } from './EIDEProject';
+import { VirtualSource } from './VirtualSource';
 import { ArrayDelRepetition } from '../lib/node-utility/Utility';
-
 import { File } from '../lib/node-utility/File';
-
 import { GlobalEvent } from './GlobalEvents';
-
 import * as NodePath from 'path';
-
 import { ProjTreeItem } from './ProjTreeItem';
-
 import * as fs from 'fs';
-
 import * as os from 'os';
-
 import { view_str$virual_doc_provider_banner } from './StringTable';
-
 import * as vscode from 'vscode';
-
 import * as yml from 'yaml';
-
 import { TreeItemType } from './types/ExplorerTypes';
 import type { VirtualFileInfo, VirtualFolderInfo } from './types/ExplorerTypes';
-
 import { VirtualFile } from './EIDETypeDefine';
 
 export interface ModifiableYamlConfigProvider {

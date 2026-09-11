@@ -194,6 +194,42 @@ for (const [mod, g] of modGroups) {
     importLines.push(BLANK);
 }
 
+const LICENSE_HEADER = `/*
+    MIT License
+
+    Copyright (c) 2019 github0null
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+*/
+`;
+
+const srcLineCount = srcText.split('\n').length;
+const DOC = [
+    '/**',
+    ' * ' + NAMES.join(' / ') + ' —— 从 ' + path.basename(SRC_FILE) + '(' + srcLineCount + ' 行)拆出。',
+    ' *',
+    ' * 注意: 本文件由 scripts/extract-class.mjs 生成, 若需再次搬移请复用该工具',
+    ' * (朴素括号扫描会因类体内列 0 的 `}` 提前截断)。',
+    ' */',
+    ''
+].join('\n');
+
 const blocks = report.slice().sort((x, y) => x.start - y.start).map(r => {
     let text = srcText.slice(r.start, r.end);
     // 原声明若未导出, 新模块里必须补 export, 否则新文件"不是模块"(TS2306) —— 实测踩过
@@ -202,7 +238,7 @@ const blocks = report.slice().sort((x, y) => x.start - y.start).map(r => {
     }
     return text;
 });
-const newContent = importLines.join('\n') + '\n' + blocks.join('\n\n') + '\n';
+const newContent = LICENSE_HEADER + '\n' + DOC + '\n' + importLines.join('\n') + '\n' + blocks.join('\n\n') + '\n';
 fs.mkdirSync(OUT_DIR, { recursive: true });
 fs.writeFileSync(OUT_ABS, newContent, 'utf8');
 console.log('');

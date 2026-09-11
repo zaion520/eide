@@ -1,3 +1,35 @@
+/*
+    MIT License
+
+    Copyright (c) 2019 github0null
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+*/
+
+/**
+ * 资源树/虚拟目录的类型定义 —— 类型叶子模块。
+ *
+ * 从 EIDEProjectExplorer.ts 拆出。必须独立成模块的原因: TreeItemType 是 enum(**值**)，
+ * 拆分出的模块需要它；若从宿主文件借，就会与"宿主引用拆分模块"形成运行时环(被 dep-gate 拦下)。
+ *
+ */
+
 import type { VirtualFile, VirtualFolder } from '../EIDETypeDefine';
 
 
