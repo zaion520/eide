@@ -12,6 +12,7 @@
     "src/OperationExplorer.ts",
     "src/Platform.ts",
     "src/ProblemMatcher.ts",
+    "src/ProjTreeItem.ts",
     "src/ProjectConfiguration.ts",
     "src/ResInstaller.ts",
     "src/ResManager.ts",
