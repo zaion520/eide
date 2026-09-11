@@ -4,6 +4,7 @@
   "vscodeImporters": [
     "src/BuildAllStatus.ts",
     "src/CodeBuilder.ts",
+    "src/DebugConfigGenerator.ts",
     "src/EIDEProject.ts",
     "src/EIDEProjectExplorer.ts",
     "src/EIDEProjectModules.ts",
