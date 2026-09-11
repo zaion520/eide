@@ -107,3 +107,13 @@ export interface VirtualFileInfo {
     path: string;       // virtual path
     vFile: VirtualFile; // virtual file info
 }
+
+// ---- 导入外部工程的结构描述(原在 EIDEProjectExplorer.ts, 下沉以避免拆分模块反向 type 依赖宿主) ----
+export interface ImporterProjectInfo {
+    name: string;
+    target?: string;
+    incList: string[];
+    defineList: string[];
+    files: VirtualFolder;
+    excludeList?: string[] | { [targetName: string]: string[] };
+}

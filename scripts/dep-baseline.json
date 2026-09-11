@@ -17,6 +17,7 @@
     "src/ProjTreeItem.ts",
     "src/ProjectConfiguration.ts",
     "src/ProjectDataProvider.ts",
+    "src/ProjectExplorerCommands.ts",
     "src/ResInstaller.ts",
     "src/ResManager.ts",
     "src/SettingManager.ts",

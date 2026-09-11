@@ -32,6 +32,7 @@ import * as yaml from 'yaml';
 
 import { GlobalEvent } from './GlobalEvents';
 import { setConfigModelUiAdapter } from './ConfigModelUi';
+import { ShowProjectVariables, RemoveSrcDir, Virtual_folderAddFile, Virtual_removeFolder, ModifyCompileConfig_openFile, ImportSourceFromExtProject, AddIncludeDir, AddDefine, AddLibDir, showIncludeDir, showLibDir, showDefine, ExcludeSourceFile, UnexcludeSourceFile, ExcludeFolder, UnexcludeFolder, editDependenceItem, RemoveDependenceItem, onSwitchCompileTools, onSetupToolchain, switchUploader, fetchShellFlasher, genDebugConfigTemplate } from './ProjectExplorerCommands';
 import { OperationExplorer } from './OperationExplorer';
 import { ProjectExplorer, ProjTreeItem } from './EIDEProjectExplorer';
 import { ResManager } from './ResManager';
@@ -208,14 +209,14 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportAsTemplate', (item) => projectExplorer.ExportProjectTemplate(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportXml', (item) => projectExplorer.ExportKeilXml(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportMakefile', (item) => projectExplorer.ExportMakefile(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.show_proj_vars', (item) => projectExplorer.ShowProjectVariables(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.show_proj_vars', (item) => ShowProjectVariables(projectExplorer.getDataProvider(), item)));
 
     // project explorer
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addSrcDir', (item) => projectExplorer.AddSrcDir(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeSrcDir', (item) => projectExplorer.RemoveSrcDir(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeSrcDir', (item) => RemoveSrcDir(projectExplorer.getDataProvider(), item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.sourceRoot.refresh', (item) => projectExplorer.refreshSrcRoot(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modify.files.options', (item) => projectExplorer.showFilesOptions(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.import.ext.source.struct', (item) => projectExplorer.ImportSourceFromExtProject(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.import.ext.source.struct', (item) => ImportSourceFromExtProject(projectExplorer.getDataProvider(), item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.modify.exclude_list', (item) => projectExplorer.openYamlConfig(item, 'src-exc-cfg')));
 
     // filesystem files
@@ -223,9 +224,9 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.filesystem_folder_add', (item) => projectExplorer.fs_folderAdd(item)));
 
     // virtual files
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_add_file', (item) => projectExplorer.Virtual_folderAddFile(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_add_file', (item) => Virtual_folderAddFile(projectExplorer.getDataProvider(), item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_add', (item) => projectExplorer.Virtual_folderAdd(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_remove', (item, items) => projectExplorer.Virtual_removeFolder(item, items)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_remove', (item, items) => Virtual_removeFolder(projectExplorer.getDataProvider(), item, items)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_folder_rename', (item) => projectExplorer.Virtual_renameFolder(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.virtual_file_remove', (item, items) => projectExplorer.Virtual_removeFile(item, items)));
 
@@ -236,12 +237,12 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.copyRelativePath', (item) => projectExplorer.copyPath('relative', item)));
 
     // file other operations
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeSource', (item, items) => projectExplorer.ExcludeSourceFile(item, items)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeSource', (item, items) => projectExplorer.UnexcludeSourceFile(item, items)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeFolder', (item, items) => projectExplorer.ExcludeFolder(item, items, false)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeFolder', (item, items) => projectExplorer.UnexcludeFolder(item, items, false)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeFolder.childSrcs', (item, items) => projectExplorer.ExcludeFolder(item, items, true)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeFolder.childSrcs', (item, items) => projectExplorer.UnexcludeFolder(item, items, true)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeSource', (item, items) => ExcludeSourceFile(projectExplorer.getDataProvider(), item, items)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeSource', (item, items) => UnexcludeSourceFile(projectExplorer.getDataProvider(), item, items)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeFolder', (item, items) => ExcludeFolder(projectExplorer.getDataProvider(), item, items, false)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeFolder', (item, items) => UnexcludeFolder(projectExplorer.getDataProvider(), item, items, false)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.excludeFolder.childSrcs', (item, items) => ExcludeFolder(projectExplorer.getDataProvider(), item, items, true)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.unexcludeFolder.childSrcs', (item, items) => UnexcludeFolder(projectExplorer.getDataProvider(), item, items, true)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.file.show.dir', (item) => projectExplorer.showFileInExplorer(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.source.modify.path', (item) => projectExplorer.openYamlConfig(item, 'src-path-cfg')));
 
@@ -256,34 +257,34 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // builder
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyCompileConfig', (item) => projectExplorer.ModifyCompileConfig(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyCompileConfig.openFile', (item) => projectExplorer.ModifyCompileConfig_openFile(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.switchToolchain', (item) => projectExplorer.onSwitchCompileTools(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.setupToolchain', (item) => projectExplorer.onSetupToolchain(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyCompileConfig.openFile', (item) => ModifyCompileConfig_openFile(projectExplorer.getDataProvider(), item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.switchToolchain', (item) => onSwitchCompileTools(projectExplorer.getDataProvider(), item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.setupToolchain', (item) => onSetupToolchain(projectExplorer.getDataProvider(), item)));
 
     // flasher
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyUploadConfig', (item) => projectExplorer.ModifyUploadConfig(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.switchUploader', (item) => projectExplorer.switchUploader(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.fetchShellFlasher', (item) => projectExplorer.fetchShellFlasher(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.switchUploader', (item) => switchUploader(projectExplorer.getDataProvider(), item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.fetchShellFlasher', (item) => fetchShellFlasher(projectExplorer.getDataProvider(), item)));
 
     // debug cfg gen
     subscriptions.push(vscode.commands.registerCommand(
-        '_cl.eide.project.genDebugConfigTemplate.jlink', (item) => projectExplorer.genDebugConfigTemplate(item, 'jlink')));
+        '_cl.eide.project.genDebugConfigTemplate.jlink', (item) => genDebugConfigTemplate(projectExplorer.getDataProvider(), item, 'jlink')));
     subscriptions.push(vscode.commands.registerCommand(
-        '_cl.eide.project.genDebugConfigTemplate.openocd', (item) => projectExplorer.genDebugConfigTemplate(item, 'openocd')));
+        '_cl.eide.project.genDebugConfigTemplate.openocd', (item) => genDebugConfigTemplate(projectExplorer.getDataProvider(), item, 'openocd')));
     subscriptions.push(vscode.commands.registerCommand(
-        '_cl.eide.project.genDebugConfigTemplate.pyocd', (item) => projectExplorer.genDebugConfigTemplate(item, 'pyocd')));
+        '_cl.eide.project.genDebugConfigTemplate.pyocd', (item) => genDebugConfigTemplate(projectExplorer.getDataProvider(), item, 'pyocd')));
 
     // project deps
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addIncludeDir', (item) => projectExplorer.AddIncludeDir(item.val.projectIndex)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addDefine', (item) => projectExplorer.AddDefine(item.val.projectIndex)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addLibDir', (item) => projectExplorer.AddLibDir(item.val.projectIndex)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showIncludeDir', (item) => projectExplorer.showIncludeDir(item.val.projectIndex)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showDefine', (item) => projectExplorer.showDefine(item.val.projectIndex)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showLibDir', (item) => projectExplorer.showLibDir(item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addIncludeDir', (item) => AddIncludeDir(projectExplorer.getDataProvider(), item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addDefine', (item) => AddDefine(projectExplorer.getDataProvider(), item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.addLibDir', (item) => AddLibDir(projectExplorer.getDataProvider(), item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showIncludeDir', (item) => showIncludeDir(projectExplorer.getDataProvider(), item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showDefine', (item) => showDefine(projectExplorer.getDataProvider(), item.val.projectIndex)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.showLibDir', (item) => showLibDir(projectExplorer.getDataProvider(), item.val.projectIndex)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modifyOtherSettings', (item) => projectExplorer.ModifyOtherSettings(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.modify.deps', (item) => projectExplorer.openYamlConfig(item, 'prj-attr-cfg')));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.editDependenceItem', (item) => projectExplorer.editDependenceItem(item)));
-    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeDependenceItem', (item) => projectExplorer.RemoveDependenceItem(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.editDependenceItem', (item) => editDependenceItem(projectExplorer.getDataProvider(), item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeDependenceItem', (item) => RemoveDependenceItem(projectExplorer.getDataProvider(), item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.importDependenceFromPack', (item) => projectExplorer.ImportPackageDependence(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.removeDependenceFromPack', (item) => projectExplorer.RemovePackageDependence(item)));
 

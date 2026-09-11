@@ -19,9 +19,17 @@ import ts from 'typescript';
 const argv = process.argv.slice(2);
 const outIdx = argv.indexOf('--out');
 const descIdx = argv.indexOf('--desc');
+const injectIdx = argv.indexOf('--inject');
 const OUT = outIdx >= 0 ? argv[outIdx + 1] : undefined;
 const DESC = descIdx >= 0 ? argv[descIdx + 1] : undefined;
-const positional = argv.filter((a, i) => a !== '--out' && a !== '--desc' && i !== outIdx + 1 && i !== descIdx + 1);
+/** --inject "dataProvider:ProjectDataProvider" : 方法体 this.<名> → 首参数 <名>: <类型> */
+const INJECT_RAW = injectIdx >= 0 ? argv[injectIdx + 1] : undefined;
+const INJECT = INJECT_RAW ? (() => {
+    const i = INJECT_RAW.indexOf(':');
+    if (i < 0) { console.error('--inject 需要 "参数名:类型名" 形式'); process.exit(1); }
+    return { param: INJECT_RAW.slice(0, i), type: INJECT_RAW.slice(i + 1) };
+})() : undefined;
+const positional = argv.filter((a, i) => a !== '--out' && a !== '--desc' && a !== '--inject' && i !== outIdx + 1 && i !== descIdx + 1 && i !== injectIdx + 1);
 const [SRC, CLASS_NAME, NAMES_RAW] = positional;
 if (!SRC || !CLASS_NAME || !NAMES_RAW || !OUT) {
     console.error('用法: node scripts/extract-methods.mjs <source.ts> <ClassName> <m1,m2,...> --out <out.ts> [--desc "说明"]');
@@ -99,8 +107,28 @@ if (missing.length) { console.error('x 未找到方法: ' + missing.join(', '));
 // ---- 安全检查: 方法体不得引用 this/super ----
 for (const m of members) {
     const body = m.body.getText();
-    if (body.split('this.').length > 1) { console.error('x 方法引用 this.: ' + m.name.text + ' (先手动解耦)'); process.exit(1); }
     if (body.split('super.').length > 1) { console.error('x 方法引用 super.: ' + m.name.text); process.exit(1); }
+    if (INJECT) {
+        // 注入模式: 允许且仅允许 this.<注入名>
+        const total = body.split('this.').length - 1;
+        const injected = body.split('this.' + INJECT.param).length - 1;
+        if (total !== injected) {
+            console.error('x 方法引用了注入之外的 this.*: ' + m.name.text + ' (this.×' + total + ', this.' + INJECT.param + '×' + injected + ')');
+            process.exit(1);
+        }
+    } else if (body.split('this.').length > 1) {
+        console.error('x 方法引用 this.: ' + m.name.text + ' (先手动解耦, 或使用 --inject)');
+        process.exit(1);
+    }
+}
+// 注入模式: 源文件内不得存在 this.<名>( 调用点(本批次的接线在 extension.ts, 由后续步骤单独改写)
+if (INJECT) {
+    for (const name of NAMES) {
+        if (text.split('this.' + name + '(').length > 1) {
+            console.error('x 源文件内存在 this.' + name + '( 调用点 —— 注入模式需要先把这些调用点改写或外移');
+            process.exit(1);
+        }
+    }
 }
 
 // ---- 转换为函数文本 ----
@@ -108,18 +136,30 @@ const funcTexts = [];
 for (const m of members) {
     const name = m.name.text;
     const before = text.slice(m.getStart(), m.name.getStart());   // e.g. "private async "
-    const rest = text.slice(m.name.getStart(), m.getEnd());       // "name(...): Ret { ... }"
+    let rest = text.slice(m.name.getStart(), m.getEnd());         // "name(...): Ret { ... }"
     const isAsync = before.split('async').length > 1;
-    funcTexts.push('export ' + (isAsync ? 'async ' : '') + 'function ' + rest);
+    if (INJECT) {
+        // 在参数列表最前面插入注入参数
+        if (m.parameters && m.parameters.length > 0) {
+            const head = text.slice(m.name.getStart(), m.parameters[0].getStart());   // "name("
+            rest = head + INJECT.param + ': ' + INJECT.type + ', ' + text.slice(m.parameters[0].getStart(), m.getEnd());
+        } else {
+            const p = rest.indexOf('(');
+            if (p < 0) { console.error('x 未找到参数列表: ' + name); process.exit(1); }
+            rest = rest.slice(0, p + 1) + INJECT.param + ': ' + INJECT.type + rest.slice(p + 1);
+        }
+    }
+    let fn = 'export ' + (isAsync ? 'async ' : '') + 'function ' + rest;
+    if (INJECT) { fn = fn.split('this.' + INJECT.param).join(INJECT.param); }
+    funcTexts.push(fn);
 }
 
-// ---- 新模块 import 推导(字符串 split/join 判定, 不用 RegExp) ----
+// ---- 新模块 import 推导(用**转换后**的函数文本, 含注入参数的类型; 字符串 split/join 判定) ----
 const needByMod = {};   // mod -> Set(binding)
 const needNamespace = new Set();
-for (const m of members) {
-    const full = text.slice(m.getStart(), m.getEnd());
+for (const fn of funcTexts) {
     for (const [id, info] of Object.entries(bindings)) {
-        if (full.split(id).length > 1) {
+        if (fn.split(id).length > 1) {
             if (info.isNamespace) needNamespace.add(id);
             else (needByMod[info.mod] = needByMod[info.mod] || new Set()).add(id);
         }
