@@ -576,6 +576,12 @@ function removeOwnManagedBlocksFromUserConfig(prj: AbstractProject): boolean {
     if (changed) {
         GlobalEvent.log_info(`user config.yaml: removed ${removed.removed} managed block(s) for this project (migrated to project-level '.clangd')`);
     }
+    if (pruned.removedFragments > 0) {
+        // 越界片段(祖先级通配)会抢在其他项目的项目级 .clangd 之前命中,
+        // 把兄弟项目的编译数据库截胡 —— 记录一条便于排查"某项目满屏红"的日志
+        GlobalEvent.log_info(`user config.yaml: pruned ${pruned.removedFragments} over-broad PathMatch fragment(s) ` +
+            `(ancestor-level wildcards hijack sibling projects' compile databases)`);
+    }
     return changed;
 }
 // ---------------------------------------------------------------------------

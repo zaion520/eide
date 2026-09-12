@@ -1028,11 +1028,97 @@ export function isManagedBlockStale(
 }
 
 /**
+ * 治理受管块内**越界的 PathMatch 片段**。
+ *
+ * 背景(实测根因):受管块可含多个 `If: PathMatch` 片段(历史版本为
+ * "项目根 + 根外源码目录"各渲染一个)。旧版对根外目录生成的正则可能是
+ * **祖先级通配**,例如 `^[dD]:/projects/.*$` —— 它匹配该目录下
+ * **所有**项目,于是同一份 config.yaml 里后出现的这个片段会把兄弟项目的
+ * 编译数据库全部截胡(实测:DSP 项目被 PROJ_C 的片段命中,clangd 拿
+ * PROJ_C 的 AC5 命令去解析 DSP 的 AC6 源码,满屏 `file not found`)。
+ *
+ * 判定:块的标记行携带 token(= 该块所属项目根的 base64),把 token 解出
+ * 来的根记为 `ownerRoot`。**若某片段路径是 ownerRoot 的严格祖先**,
+ * 则该片段必为越界 —— 它对 ownerRoot 是冗余的(块内本就有 ownerRoot 片段),
+ * 对兄弟项目却是截胡。合法的"根外源码目录"片段是其兄弟/子目录,不会被误删。
+ *
+ * token 缺失(旧格式)时退化为保守规则:同块内若片段 A 的路径是片段 B 的
+ * 严格祖先,则 A 视为越界。
+ *
+ * 只删片段本身,块的其余片段与标记行原样保留。
+ */
+export function pruneForeignPathMatchFragments(
+    block: string,
+    ownerRoot?: string
+): { block: string; removedFragments: number } {
+
+    const text = String(block || '');
+
+    // 从标记行取 token 并还原 ownerRoot(调用方未提供时)
+    let owner = ownerRoot;
+    if (!owner) {
+        const tokenMatch = text.match(/# BEGIN EIDE Clangd (?:Support|Sync)\s*(\S+)/);
+        if (tokenMatch) {
+            try {
+                const decoded = Buffer.from(tokenMatch[1], 'base64').toString('utf8');
+                if (decoded && /[\\/]/.test(decoded)) { owner = decoded; }
+            } catch { /* token 非法:退化为保守规则 */ }
+        }
+    }
+
+    // 切成 "---" 分隔的片段(保留分隔符,便于原样重组)
+    const parts = text.split(/(?=^---\s*$)/m);
+
+    type Frag = { text: string; root?: string };
+    const frags: Frag[] = parts.map((part) => {
+        const pm = part.match(/PathMatch:\s*"([^"]+)"/);
+        return { text: part, root: pm ? pathFromPathMatch(pm[1]) : undefined };
+    });
+
+    const normalize = (p: string): string => toPosix(path.normalize(p)).replace(/\/+$/, '').toLowerCase();
+    const isAncestor = (ancestor: string, descendant: string): boolean => {
+        const a = normalize(ancestor);
+        const d = normalize(descendant);
+        return a !== d && d.startsWith(`${a}/`);
+    };
+
+    let removedFragments = 0;
+    const kept = frags.map((frag) => {
+        if (!frag.root) { return frag.text; }
+
+        // 规则 1(优先):片段路径是块所属项目根的严格祖先 → 越界
+        let overbroad = !!owner && isAncestor(frag.root, owner);
+
+        // 规则 2(退化):无法确定 ownerRoot 时,同块内的祖先片段视为越界
+        if (!overbroad && !owner) {
+            overbroad = frags.some((other) => other !== frag && other.root && isAncestor(frag.root!, other.root));
+        }
+
+        if (overbroad) { removedFragments++; return ''; }
+        return frag.text;
+    });
+
+    // 兜底:任何情况下都不允许把块削到"无法覆盖自己项目根"。
+    // 正常配置不会触发(块内本就有 ownerRoot 自身的片段);万一遇到畸形块,
+    // 宁可原样保留也不制造"拆掉配置却没补上"的真空。
+    if (removedFragments > 0) {
+        const covered = frags.some((frag, index) =>
+            frag.root && kept[index] !== '' &&
+            (!owner || normalize(frag.root) === normalize(owner) || isAncestor(frag.root, owner))
+        );
+        if (!covered) { return { block: text, removedFragments: 0 }; }
+    }
+
+    return { block: kept.join(''), removedFragments };
+}
+
+/**
  * 治理 config.yaml:回收受管块。
  *
- * 两条规则:
- *  1. **当前标记族(`Clangd Support`)**: 只回收"已失效"的块
- *     (项目根已不存在 / 编译数据库已不存在) —— 在用配置保留。
+ * 三条规则:
+ *  1. **当前标记族(`Clangd Support`)**: 回收"已失效"的块
+ *     (项目根已不存在 / 编译数据库已不存在) —— 在用配置保留;
+ *     同时在保留的块内剔除**越界 PathMatch 片段**(祖先级通配会截胡兄弟项目)。
  *  2. **遗留标记族(`Clangd Sync`)**: **无条件全部回收**。
  *     该格式已废弃,且它指向的 `.eide-clangd/` 旧布局已被本管线移除;
  *     更关键的是:同一项目若同时存在 Sync 块与 Support 块,两者的
@@ -1047,13 +1133,14 @@ export function pruneStaleManagedBlocks(
         /** 是否回收遗留标记族(默认 true;仅测试/诊断场景需要关掉) */
         removeLegacy?: boolean;
     }
-): { content: string; removed: number; removedLegacy: number } {
+): { content: string; removed: number; removedLegacy: number; removedFragments: number } {
 
     let out = String(content || '');
     let removed = 0;
     let removedLegacy = 0;
+    let removedFragments = 0;
 
-    // ---- 1) 当前标记族: 按失效判定回收 ----
+    // ---- 1) 当前标记族: 按失效判定回收 + 剔除越界片段 ----
     const currentRe = new RegExp(
         `${escapeRegex(CLANGD_MANAGED_MARKERS.begin)} (\\S+)[\\s\\S]*?${escapeRegex(CLANGD_MANAGED_MARKERS.end)} \\1\\s*`,
         'g'
@@ -1062,6 +1149,11 @@ export function pruneStaleManagedBlocks(
         if (isManagedBlockStale(block, opts.pathExists, opts.dbExists)) {
             removed++;
             return '';
+        }
+        const pruned = pruneForeignPathMatchFragments(block);
+        if (pruned.removedFragments > 0) {
+            removedFragments += pruned.removedFragments;
+            return pruned.block;
         }
         return block;
     });
@@ -1075,7 +1167,7 @@ export function pruneStaleManagedBlocks(
         out = out.replace(legacyRe, () => { removedLegacy++; return ''; });
     }
 
-    return { content: out, removed, removedLegacy };
+    return { content: out, removed, removedLegacy, removedFragments };
 }
 
 /**
