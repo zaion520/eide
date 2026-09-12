@@ -37,7 +37,7 @@
     "homepage": "https://em-ide.com",
     "license": "MIT",
     "description": "A mcu development environment for 8051/AVR/STM8/Cortex-M/MIPS/RISC-V",
-    "version": "3.27.52",
+    "version": "3.27.53",
     "preview": false,
     "engines": {
         "vscode": "^1.89.0"
@@ -1210,6 +1210,10 @@
                 "title": "%eide.project.relocateRoot%"
             },
             {
+                "command": "_cl.eide.project.exportAsV41",
+                "title": "%eide.project.exportAsV41%"
+            },
+            {
                 "command": "_cl.eide.project.clangd.rebuildCache",
                 "title": "%eide.project.clangd.rebuildCache%"
             },
@@ -1265,6 +1269,9 @@
                 },
                 {
                     "command": "_cl.eide.project.clangd.rebuildCache"
+                },
+                {
+                    "command": "_cl.eide.project.exportAsV41"
                 }
             ],
             "view/title": [
@@ -1459,6 +1466,11 @@
                     "command": "_cl.eide.project.clangd.rebuildCache",
                     "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
                     "group": "6_group@3"
+                },
+                {
+                    "command": "_cl.eide.project.exportAsV41",
+                    "when": "viewItem == SOLUTION && view == cl.eide.view.projects",
+                    "group": "6_group@6"
                 },
                 {
                     "command": "_cl.eide.project.buildAllTargets",

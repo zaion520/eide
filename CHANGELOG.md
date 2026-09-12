@@ -9,6 +9,8 @@ All notable version changes will be recorded in this file.
 ### [unreleased] revision
 
 **New**:
+  - `Target`: **v4.2 → v4.1 降级导出**(命令 `_cl.eide.project.exportAsV41`,右键项目节点 + 命令面板)——把 v4.2 布局合并回官方版可读的单文件工程:产出 `.eide/eide.4.1.yml`(键序与官方版一致)并把旁路文件还原到 `.eide/` 根(`<target>.libs.yml`、`<target>.st.option.bytes.ini`、按目标名为键的 `files.options.yml`);**不改动**当前 v4.2 工程,导出为附加产物,用于与官方版用户交换项目或回馈上游(单位测试覆盖"导出→再迁移回 v4.2"的无损往返)
+  - `Project`: **重定位根目录时重写内嵌绝对路径**——`.code-workspace` 内嵌 settings 与 `.vscode/settings.json` 中的绝对路径(如 clangd `--query-driver=<abs>`、`compilerPath` 一类)不随目录搬迁自动更新,此前重定位后需要手工修;现按 jsonc AST 精确改写字符串字面量(注释/缩进/键序原样保留,只匹配路径边界避免 `root` 误伤 `root2`,沿用原值分隔符风格),损坏的 JSONC 一律不碰
   - `Builder`: **Build All 与 clangd/cpptools 刷新解耦**——Build All 期间连续切换 target 原本每次都触发 `UpdateCppConfig` 防抖刷新(cpptools 配置 + 编译数据库 + clangd 编译库重生成/唤醒),中间 target 的刷新既慢又无意义;现挂起整个刷新管线,恢复激活 target 后统一补刷一次(只针对最终激活 target);新增 `AbstractProject.suspendCppConfigUpdate/resumeCppConfigUpdate`
   - `Builder`: **serial_monitor 功能移除,扩展 100% 去 .NET**——`res/tools/<os>/serial_monitor/`(最后一批 .NET 程序)整体删除;串口枚举改为系统原生实现零依赖(Windows 读注册表 `HARDWARE\DEVICEMAP\SERIALCOMM`,Linux/macOS 枚举 `/dev` 设备节点),`${port}`/`${portList}` 烧录变量与 STCgal 串口选择功能保留;构建路径的 `ensureDotnetRuntime`(.NET 检测/自动安装)与 `generateDotnetProgramCmd` 一并删除
   - `Builder`: **Build All 多 target 并行构建**(默认开启,`EIDE.Builder.ParallelBuildAll` 可关闭回退串行)——三阶段:串行切换 target 生成各自 `build/<target>/builder.params` → 并行启动 Go builder(各 outDir 的 obj/`.lock`/`objs.db.json` 完全独立无共享状态,单 target 线程数按 CPU 核数均分避免超载,最多 4 并发) → 恢复激活态后统一刷新;冷构建 3 个 480 文件 target 时 wall time 约为串行的 1/2 ~ 1/3,单 target 增量场景不受影响;失败 target 汇总保留完整日志尾部
@@ -32,6 +34,7 @@ All notable version changes will be recorded in this file.
   - `Cppcheck`: 移除静态检测功能(命令、右键"静态检查"子菜单、`EIDE.Cppcheck.ExecutablePath` 设置与工具安装项一并删除)
   - `Debug`: pyOCD 调试配置(运行时与右键"生成调试配置模板"两条路径)统一新增 `overrideGDBServerStartedRegex: "port"` 与 `executable`(后缀跟随工具链:Keil 为 .axf;AC5/AC6 模板不再丢弃 executable);probe-rs 的 `programBinary` 默认文件改为跟随工具链产物(Keil 为 .axf,不再硬编码 .elf)
   - `Project Loading`: 屏蔽项目文件版本检测——eide.yml 版本比扩展新时不再拒绝加载,仅记录警告(eide-log)后继续
+  - `Project`: 修复 v4.2 布局下 `.eide/targets/<name>/files.options.yml`(源文件额外编译参数)的编辑不触发刷新——`.eide` 目录监听原为非递归,子目录内的改动收不到事件,必须重载项目才生效;现改为递归监听(不支持递归的平台自动降级),并让 `.eide` 子树内的重命名事件提前短路、不再触发无谓的源文件树重扫
   - `eide-binaries`: 屏蔽启动后的联网更新检测(不再每 6 小时查询新版本、不再弹更新失败提示);本地安装/修复路径(首次安装、binaries 损坏重装、`eide.reinstall.binaries` 命令)行为不变
 
 ***

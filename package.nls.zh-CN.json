@@ -22,6 +22,7 @@
     "eide.project.active": "设为活动",
     "eide.project.close": "关闭项目",
     "eide.project.relocateRoot": "重定位项目根目录",
+    "eide.project.exportAsV41": "导出为 v4.1 单文件工程(兼容官方版)",
     "eide.project.show.commands": "查看生成的编译器命令行",
     "eide.project.switch.target": "切换目标",
     "eide.target.create": "新建目标",

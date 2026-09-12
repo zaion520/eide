@@ -364,6 +364,12 @@ class SourceRootList implements SourceProvider {
 
     private onFileRenamed(targetFile: File) {
 
+        // '.eide' 内的重命名属项目元数据(target 文件/旁路文件/生成产物),与源文件树无关。
+        // 递归监听 '.eide' 后这类事件明显变多,提前短路避免无谓的源树重扫。
+        // (本监听挂在全局事件总线上且在构造期注册,项目未加载完时 eideDir 可能还是 undefined)
+        const eideDir = this.project.getEideDir();
+        if (eideDir && File.isSubPathOf(eideDir.path, targetFile.path)) { return; }
+
         const key = this.project.toRelativePath(targetFile.path);
 
         // it's a root sources folder ?
@@ -880,7 +886,10 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
     private loadProjectDirectory() {
 
         // init watcher for '.eide' folder
-        this.eideDirWatcher = new FileWatcher(this.getEideDir(), false, false);
+        // 必须递归:v4.2 的 per-target 旁路文件在 '.eide/targets/<name>/' 下,
+        // 非递归监听会让这些文件的编辑收不到事件,只能重载项目才生效。
+        // createSafetyFileWatcher 会在不支持递归的平台自动降级为非递归。
+        this.eideDirWatcher = platform.createSafetyFileWatcher(this.getEideDir(), true, false);
         this.eideDirWatcher.on('error', err => GlobalEvent.log_error(err));
         this.eideDirWatcher.OnChanged = f => this.onEideDirChanged('changed', f);
         this.eideDirWatcher.OnRename = f => this.onEideDirChanged('renamed', f);
@@ -3523,7 +3532,9 @@ class EIDEProject extends AbstractProject {
             }
 
             // project env changed
-            if (file.name == this.getEnvFile(true).name) {
+            // 递归监听后事件可能来自 '.eide' 子目录,按完整路径比较,
+            // 避免子目录中的同名文件误触发
+            if (file.path.toLowerCase() == this.getEnvFile(true).path.toLowerCase()) {
                 this.UpdateCppConfig(); // trigger cpptools config update
             }
         }

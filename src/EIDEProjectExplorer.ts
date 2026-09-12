@@ -79,9 +79,10 @@ import { applyTargetToConfigData, makeTargetInfo, formatBuildAllSummary, BuildTa
 import { BuildAllStatus } from './BuildAllStatus';
 import {
     computeLevelDelta, findProjectRootsUnder, rewriteConfigRelativePaths, auditExternalReferences,
+    rewriteEmbeddedAbsolutePaths,
 } from './ProjectRootTool';
 import {
-    isV42Skeleton, assembleFromSkeleton, splitIntoSkeleton, packTargetForDisk,
+    isV42Skeleton, assembleFromSkeleton, splitIntoSkeleton, packTargetForDisk, exportProjectAsV41,
 } from './ProjectStorageV42';
 import {
     rebuildClangdCache,
@@ -717,6 +718,34 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
             // 3. mechanically rewrite relative paths in the v4.2 layout
             const newEideDir = NodePath.join(newRoot, '.eide');
+
+            // 3a. rewrite absolute paths embedded in JSON/JSONC configs
+            // (.code-workspace 内嵌 settings、.vscode/settings.json):这些文件里
+            // 的绝对路径(如 clangd --query-driver=<abs>)不随目录搬迁自动更新,
+            // 而 folders 里的相对路径('.')无需改动。
+            const embeddedRewrites: string[] = [];
+            const rewriteJsoncFile = (filePath: string): void => {
+                if (!fs.existsSync(filePath)) { return; }
+                try {
+                    const original = fs.readFileSync(filePath, 'utf8');
+                    const { content, rewritten } = rewriteEmbeddedAbsolutePaths(original, oldRoot, newRoot);
+                    if (rewritten.length === 0 || content === original) { return; }
+                    fs.writeFileSync(filePath, content, 'utf8');
+                    for (const item of rewritten) {
+                        embeddedRewrites.push(`${NodePath.basename(filePath)}: ${item.path}: ${item.before} -> ${item.after}`);
+                    }
+                } catch (error) {
+                    GlobalEvent.log_error(error);
+                }
+            };
+            for (const ws of wsFiles) { rewriteJsoncFile(NodePath.join(newRoot, ws)); }
+            rewriteJsoncFile(NodePath.join(newRoot, '.vscode', 'settings.json'));
+
+            if (embeddedRewrites.length > 0) {
+                GlobalEvent.log_info(`--- Embedded absolute paths rewritten for '${newRoot}' ---`);
+                for (const line of embeddedRewrites) { GlobalEvent.log_info(line); }
+            }
+
             const skeleton = yaml.parse(fs.readFileSync(NodePath.join(newEideDir, 'eide.yml'), 'utf8'));
             const targetFiles: { name: string; data: any }[] = [];
             for (const name of <string[]>(<unknown>skeleton.targets)) {
@@ -753,7 +782,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
             GlobalEvent.show_msgbox(
                 brokenCount > 0 ? 'Warning' : 'Info',
-                `Project root relocated. External refs: ${report.length}, broken: ${brokenCount}. See 'root-audit.report.txt'.`
+                `Project root relocated. External refs: ${report.length}, broken: ${brokenCount}.` +
+                (embeddedRewrites.length > 0 ? ` Embedded paths rewritten: ${embeddedRewrites.length}.` : '') +
+                ` See 'root-audit.report.txt'.`
             );
             if (unrewritten.length > 0) {
                 GlobalEvent.show_msgbox('Warning',
@@ -770,6 +801,61 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         } catch (error) {
             GlobalEvent.log_error(error);
             GlobalEvent.show_msgbox('Error', `Relocate project root failed: ${(error as Error).message}`);
+        }
+    }
+
+    /**
+     * 导出为 v4.1 单文件工程(降级导出,供官方版 EIDE 打开或回馈上游)。
+     *
+     * 产出附加文件,不改动当前 v4.2 工程:`.eide/eide.4.1.yml` 单文件 +
+     * `.eide/` 根下按目标名平铺的旁路文件副本。回退到官方版时用导出文件
+     * 替换 eide.yml 即可;当前项目仍以 v4.2 继续运行。
+     */
+    public async onExportProjectAsV41(item?: ProjTreeItem) {
+
+        const prj = this.resolveTargetOperationProject(item);
+        if (!prj) {
+            GlobalEvent.show_msgbox('Info', `No active project !`);
+            return;
+        }
+
+        const eideDir = prj.getEideDir().path;
+        const cfgFile = NodePath.join(eideDir, 'eide.yml');
+        if (!fs.existsSync(cfgFile) || !isV42Skeleton(yaml.parse(fs.readFileSync(cfgFile, 'utf8')))) {
+            GlobalEvent.show_msgbox('Warning',
+                `This project is not in the v4.2 layout, no need to export.`);
+            return;
+        }
+
+        const confirm = await vscode.window.showInformationMessage(
+            `Export this project as a v4.1 single-file config for the official EIDE ?\n\n` +
+            `Output: .eide/eide.4.1.yml (+ flat sidecar copies)\n` +
+            `The current v4.2 project files are NOT modified.`,
+            { modal: true }, 'Yes', 'No'
+        );
+        if (confirm !== 'Yes') { return; }
+
+        if (this._opLock.isLocked(OpLockKeys.Export)) {
+            GlobalEvent.show_msgbox('Warning', 'Busy, please try again later !');
+            return;
+        }
+        this._opLock.tryAcquire(OpLockKeys.Export);
+
+        try {
+            // 先落盘,保证导出内容包含最新编辑(导出读取的是磁盘文件)
+            prj.Save();
+
+            const result = exportProjectAsV41(eideDir);
+
+            GlobalEvent.show_msgbox('Info',
+                `Exported to '${result.cfgFilePath}'` +
+                (result.sidecarFiles.length > 0 ? ` (+${result.sidecarFiles.length} sidecar file(s))` : '') +
+                `.\n\nTo use it with the official EIDE: replace '.eide/eide.yml' with this file.`);
+        } catch (error) {
+            GlobalEvent.log_error(error);
+            GlobalEvent.show_msgbox('Error', `Export failed: ${(error as Error).message}`);
+        } finally {
+            this._opLock.release(OpLockKeys.Export);
         }
     }
 

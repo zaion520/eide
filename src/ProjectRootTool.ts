@@ -6,11 +6,14 @@
  *     (支持诡异布局:.eide 与 Keil 工程不同级、多项目同级共享父目录、深嵌套);
  *  2. 路径机械重写:adjustRelativePath / rewriteConfigRelativePaths
  *     (项目根移动时按层级差增删 `../` 前缀,无法机械处理的内容原样保留);
+ *     rewriteEmbeddedAbsolutePaths 负责 JSON/JSONC 文本(如 `.code-workspace`、
+ *     `.vscode/settings.json`)中内嵌的绝对路径,按新根重新定位;
  *  3. 外部引用体检:auditExternalReferences
  *     (列出所有出根引用、存在性,识别公用目录与断链——如 PROJ_A 项目的 `../Library`)。
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import * as jsonc_parser from 'jsonc-parser';
 
 const EIDE_DIR = '.eide';
 const PROJECT_FILE_NAMES = ['eide.yml', 'eide.json'];
@@ -339,3 +342,142 @@ export function auditExternalReferences(
 
     return report;
 }
+
+// ---------------------------------------------------------------------------
+// 4. embedded absolute path rewriting (JSON / JSONC documents)
+// ---------------------------------------------------------------------------
+
+function toUnixLower(p: string): string {
+    return p.replace(/\\/g, '/').toLowerCase();
+}
+
+/**
+ * 把单个字符串字面量中的项目根绝对路径前缀替换为新根。
+ *
+ * 返回 undefined 表示无需改动。只替换"路径前缀 + 边界"的形态
+ * (`D:/old/root/x` → `D:/new/root/x`),避免把 `D:/old/root2` 这类
+ * 同前缀但不同目录的路径误伤;分隔符与大小写在 Windows 上不敏感,
+ * 替换文本沿用原值的分隔符风格(原值用 `\` 就写回 `\`)。
+ *
+ * 一个字面量里可能出现**多段**路径(如 `--query-driver=a;b` 形式的多值参数),
+ * 因此逐段扫描替换,而不是只处理第一处。
+ */
+export function retargetAbsolutePath(value: string, oldRoot: string, newRoot: string): string | undefined {
+    const raw = String(value || '');
+    if (!raw) { return undefined; }
+
+    const normalizedOld = toUnixLower(path.resolve(oldRoot)).replace(/\/$/, '');
+    if (!normalizedOld) { return undefined; }
+
+    const resolvedNew = path.resolve(newRoot);
+    const replacement = raw.includes('\\') ? resolvedNew : resolvedNew.replace(/\\/g, '/');
+    const normalizedRaw = toUnixLower(raw);
+
+    let result = '';
+    let cursor = 0;
+    let searchFrom = 0;
+    let changed = false;
+
+    while (searchFrom < normalizedRaw.length) {
+        const index = normalizedRaw.indexOf(normalizedOld, searchFrom);
+        if (index === -1) { break; }
+
+        const afterIndex = index + normalizedOld.length;
+        // 前缀必须落在路径边界上:起点即开头或紧跟在非路径字符之后,
+        // 终点即原文末尾或下一个分隔符(防止 'root' 命中 'root2')
+        const before = index === 0 ? '' : raw[index - 1];
+        const after = afterIndex < raw.length ? raw[afterIndex] : '';
+        const onBoundary = (!before || /[\s"'=,:;(\[{]/.test(before)) && (!after || after === '/' || after === '\\');
+
+        if (onBoundary) {
+            result += raw.slice(cursor, index) + replacement;
+            cursor = afterIndex;
+            changed = true;
+        }
+        searchFrom = afterIndex;
+    }
+
+    if (!changed) { return undefined; }
+    result += raw.slice(cursor);
+    return result === raw ? undefined : result;
+}
+
+export interface EmbeddedPathRewriteResult {
+    /** 重写后的文档文本(无改动时与输入完全相同) */
+    content: string;
+    /** 被改写的字段路径(如 `settings.clangd.arguments[0]`),供日志/提示 */
+    rewritten: { path: string; before: string; after: string }[];
+}
+
+/**
+ * 重写 JSON/JSONC 文档中内嵌的项目根绝对路径(项目根移动时使用)。
+ *
+ * 覆盖 `.code-workspace` 与 `.vscode/settings.json` 这类"配置里写死绝对路径"
+ * 的场景:前者内嵌 settings(如 `clangd.arguments` 的 `--query-driver=<abs>`),
+ * 后者可能持有路径型选项。采用 jsonc-parser 的 AST 定位 + applyEdits,
+ * 只改动字符串字面量本身,注释与缩进原样保留;解析失败时原样返回(不冒险重写)。
+ *
+ * 注意:`modify()` 返回的是**针对原文**的编辑数组,必须全部收集后一次性
+ * 交给 `applyEdits`(它按偏移倒序应用);对同一份原文逐个应用会因偏移失效
+ * 而抛 'Overlapping edit'。
+ *
+ * 无改动 / 文档损坏 / 编辑冲突时一律原样返回 `text`,调用方据 `rewritten` 判断。
+ */
+export function rewriteEmbeddedAbsolutePaths(
+    content: string,
+    oldRoot: string,
+    newRoot: string
+): EmbeddedPathRewriteResult {
+    const text = String(content || '');
+    if (!text || toUnixLower(oldRoot) === toUnixLower(newRoot)) {
+        return { content: text, rewritten: [] };
+    }
+
+    const rewritten: EmbeddedPathRewriteResult['rewritten'] = [];
+    const edits: jsonc_parser.Edit[] = [];
+
+    // 先校验文档:visit 对残缺输入不抛异常,只会"尽力"报告看到的字面量,
+    // 直接重写会在损坏的文件上动手脚。宁可原样返回,也不写坏用户配置。
+    const parseErrors: jsonc_parser.ParseError[] = [];
+    jsonc_parser.parse(text, parseErrors, { allowTrailingComma: true });
+    if (parseErrors.length > 0) {
+        return { content: text, rewritten: [] };
+    }
+
+    try {
+        jsonc_parser.visit(text, {
+            onLiteralValue: (
+                value: unknown,
+                _offset: number,
+                _length: number,
+                _startLine: number,
+                _startCharacter: number,
+                pathSupplier: () => jsonc_parser.JSONPath
+            ) => {
+                if (typeof value !== 'string') { return; }
+                const next = retargetAbsolutePath(value, oldRoot, newRoot);
+                if (next === undefined) { return; }
+                const path = pathSupplier();
+                edits.push(...jsonc_parser.modify(text, path, next, {
+                    formattingOptions: { insertSpaces: true, tabSize: 4 }
+                }));
+                rewritten.push({
+                    path: path.map((segment) => (typeof segment === 'number' ? `[${segment}]` : String(segment))).join('.'),
+                    before: value,
+                    after: next
+                });
+            }
+        });
+    } catch {
+        return { content: text, rewritten: [] }; // 非法 JSONC:保持原样,交由调用方提示
+    }
+
+    if (edits.length === 0) { return { content: text, rewritten: [] }; }
+
+    try {
+        return { content: jsonc_parser.applyEdits(text, edits), rewritten };
+    } catch {
+        return { content: text, rewritten: [] }; // 编辑冲突:宁可不改,也不写坏用户配置
+    }
+}
+

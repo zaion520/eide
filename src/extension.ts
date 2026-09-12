@@ -206,6 +206,7 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.clangd.rebuildCache', (item) => projectExplorer.onRebuildClangdCache(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.buildAllTargets', (item) => projectExplorer.onBuildAllTargets(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.relocateRoot', (item) => projectExplorer.onRelocateProjectRoot(item)));
+    subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportAsV41', (item) => projectExplorer.onExportProjectAsV41(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportAsTemplate', (item) => projectExplorer.ExportProjectTemplate(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportXml', (item) => projectExplorer.ExportKeilXml(item)));
     subscriptions.push(vscode.commands.registerCommand('_cl.eide.project.exportMakefile', (item) => projectExplorer.ExportMakefile(item)));

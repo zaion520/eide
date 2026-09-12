@@ -22,6 +22,7 @@
     "eide.project.active": "Active Project",
     "eide.project.close": "Close Project",
     "eide.project.relocateRoot": "Relocate Project Root",
+    "eide.project.exportAsV41": "Export as v4.1 single-file project (upstream compatible)",
     "eide.project.show.commands": "Show Compiler CommandLine",
     "eide.project.switch.target": "Switch Target",
     "eide.target.create": "Create Target",

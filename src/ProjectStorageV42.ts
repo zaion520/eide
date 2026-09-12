@@ -18,6 +18,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import type { ProjectTargetInfo } from './EIDETypeDefine';
+import { EIDE_CONF_VERSION_V41 } from './ProjectConsts';
+import { getTargetLibsFileName, getTargetOptionBytesFileName } from './TargetSidecars';
 
 export const EIDE_CONF_VERSION_V42 = '4.2';
 
@@ -271,4 +273,141 @@ export function migrateProjectFileToV42(cfgFilePath: string): void {
     // 5. finally rewrite eide.yml as the v4.2 skeleton
     const { skeleton } = splitIntoSkeleton(parsed);
     fs.writeFileSync(cfgFilePath, yaml.stringify(skeleton), 'utf8');
+}
+
+// ---------------------------------------------------------------------------
+// downgrade export (v4.2 -> v4.1 single file, for sharing with upstream EIDE)
+// ---------------------------------------------------------------------------
+
+/**
+ * 把 v4.2 的"骨架 + 每目标文件"合并为 v4.1 单文件磁盘对象。
+ *
+ * v4.1 的 targets 条目形态与 v4.2 的 `targets/<name>/<name>.yml` 完全一致
+ * (见 `splitIntoSkeleton`),因此这里只需把目标数据挂回骨架的 `targets` 映射,
+ * 并把 version 改为 4.1。目标顺序沿用骨架里的索引。
+ */
+export function mergeV42ToV41Disk(skeleton: any, targetFiles: TargetFileData[]): any {
+    const disk: any = {
+        name: skeleton?.name,
+        type: skeleton?.type,
+        outDir: skeleton?.outDir,
+        deviceName: skeleton?.deviceName,
+        packDir: skeleton?.packDir,
+        srcDirs: skeleton?.srcDirs,
+        virtualFolder: skeleton?.virtualFolder,
+        miscInfo: skeleton?.miscInfo,
+        dependenceList: skeleton?.dependenceList,
+        version: EIDE_CONF_VERSION_V41,
+        targets: {}
+    };
+
+    for (const item of targetFiles || []) {
+        disk.targets[item.name] = item.data;
+    }
+
+    return disk;
+}
+
+/** v4.1 单文件写出(键序与官方版一致,便于与上游工程对比 diff) */
+export function dumpV41ProjectFile(obj: any): string {
+    const keyOrder = [
+        'version', 'name', 'type', 'deviceName', 'packDir', 'srcDirs',
+        'virtualFolder', 'dependenceList', 'outDir', 'miscInfo', 'targets'
+    ];
+    return yaml.stringify(obj, {
+        indent: 2,
+        lineWidth: 1000,
+        sortMapEntries: (a: any, b: any) => {
+            const i_a = keyOrder.findIndex((e) => e === a.key);
+            const i_b = keyOrder.findIndex((e) => e === b.key);
+            if (i_a === -1 && i_b === -1) {
+                return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+            } else if (i_a === -1) {
+                return 1;
+            } else if (i_b === -1) {
+                return -1;
+            }
+            return i_a - i_b;
+        }
+    });
+}
+
+export interface DowngradeExportResult {
+    /** 导出的 v4.1 单文件路径 */
+    cfgFilePath: string;
+    /** 一并还原到 `.eide/` 根的旁路文件(源 -> 目标) */
+    sidecarFiles: { from: string; to: string }[];
+}
+
+/**
+ * 把 v4.2 项目导出为官方版可读的 v4.1 布局(降级导出)。
+ *
+ * 写出两个位置:
+ *  - `<eideDir>/eide.v4.1.yml` —— 合并后的 v4.1 单文件(不覆盖正在使用的 eide.yml)
+ *  - `.eide/` 根下的旁路文件副本(<target>.libs.yml / <target>.st.option.bytes.ini /
+ *    files.options.yml),v4.1 按"目标名为键"查找它们
+ *
+ * **不改动** v4.2 源文件:导出是附加产物,当前项目仍以 v4.2 运行。
+ * 回退到官方版:用导出的单文件替换 eide.yml、按需放置旁路文件即可
+ * (或直接用 `eide.v4.1.bak.yml` 恢复迁移前状态)。
+ */
+export function exportProjectAsV41(eideDir: string): DowngradeExportResult {
+    const cfgFilePath = path.join(eideDir, 'eide.yml');
+    const parsed = yaml.parse(fs.readFileSync(cfgFilePath, 'utf8'));
+    if (!isV42Skeleton(parsed)) {
+        throw Error(`Not a v4.2 project: '${cfgFilePath}'. Nothing to downgrade.`);
+    }
+
+    const targetNames = <string[]>(<unknown>parsed.targets);
+    const targetFiles: TargetFileData[] = [];
+    for (const name of targetNames) {
+        const targetFile = path.join(getTargetDir(eideDir, name), `${name}.yml`);
+        // 缺失目标文件 = 数据损坏,宁可抛错中止,不可静默导出残缺工程
+        if (!fs.existsSync(targetFile)) {
+            throw Error(`Target config file '${targetFile}' is missing ! Export aborted.`);
+        }
+        targetFiles.push({ name, data: yaml.parse(fs.readFileSync(targetFile, 'utf8')) });
+    }
+
+    const outPath = path.join(eideDir, `eide.${EIDE_CONF_VERSION_V41}.yml`);
+    fs.writeFileSync(outPath, dumpV41ProjectFile(mergeV42ToV41Disk(parsed, targetFiles)), 'utf8');
+
+    // 旁路文件:v4.1 在 `.eide/` 根按目标名查找
+    const sidecarFiles: { from: string; to: string }[] = [];
+
+    // 1) files.options.yml(各目标独立文件 -> 合并为按目标名为键的单文件)
+    const sharedOptions: any = { version: undefined, options: {} };
+    for (const name of targetNames) {
+        const perTarget = path.join(getTargetDir(eideDir, name), 'files.options.yml');
+        if (!fs.existsSync(perTarget)) { continue; }
+        try {
+            const optsObj = yaml.parse(fs.readFileSync(perTarget, 'utf8')) || {};
+            if (optsObj.version !== undefined) { sharedOptions.version = optsObj.version; }
+            if (optsObj.options !== undefined) { sharedOptions.options[name] = optsObj.options; }
+        } catch (error) {
+            console.error(error);
+        }
+    }
+    if (Object.keys(sharedOptions.options).length > 0) {
+        const sharedPath = path.join(eideDir, 'files.options.yml');
+        fs.writeFileSync(sharedPath, yaml.stringify(sharedOptions, { indent: 4, lineWidth: 1000 }), 'utf8');
+        sidecarFiles.push({ from: sharedPath, to: sharedPath });
+    }
+
+    // 2) <target>.libs.yml / <target>.st.option.bytes.ini
+    for (const name of targetNames) {
+        const pairs: [string, string][] = [
+            ['libs.yml', getTargetLibsFileName(name)],
+            ['st.option.bytes.ini', getTargetOptionBytesFileName(name)]
+        ];
+        for (const [inner, flatName] of pairs) {
+            const from = path.join(getTargetDir(eideDir, name), inner);
+            if (!fs.existsSync(from)) { continue; }
+            const to = path.join(eideDir, flatName);
+            fs.copyFileSync(from, to);
+            sidecarFiles.push({ from, to });
+        }
+    }
+
+    return { cfgFilePath: outPath, sidecarFiles };
 }
