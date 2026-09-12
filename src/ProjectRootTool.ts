@@ -9,21 +9,19 @@
  *     rewriteEmbeddedAbsolutePaths 负责 JSON/JSONC 文本(如 `.code-workspace`、
  *     `.vscode/settings.json`)中内嵌的绝对路径,按新根重新定位;
  *  3. 外部引用体检:auditExternalReferences
- *     (列出所有出根引用、存在性,识别公用目录与断链——如 PROJ_A 项目的 `../Library`)。
+ *     (列出所有出根引用、存在性,识别公用目录与断链(实测背景:构建目录做根的工程里 `../Library` 一类公用库引用))。
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import * as jsonc_parser from 'jsonc-parser';
-
-const EIDE_DIR = '.eide';
-const PROJECT_FILE_NAMES = ['eide.yml', 'eide.json'];
+import { EIDE_DIR, PROJECT_CONFIG_FILE_NAMES } from './ProjectConsts';
 
 // ---------------------------------------------------------------------------
 // 1. root searching
 // ---------------------------------------------------------------------------
 
 export function isProjectRoot(dir: string): boolean {
-    for (const name of PROJECT_FILE_NAMES) {
+    for (const name of PROJECT_CONFIG_FILE_NAMES) {
         if (fs.existsSync(path.join(dir, EIDE_DIR, name))) { return true; }
     }
     return false;
@@ -215,7 +213,7 @@ export function computeLevelDelta(oldRoot: string, newRoot: string): number | un
 
 /**
  * 收集配置中引用的、位于项目根之外的源码/包含目录(绝对路径、去重)。
- * 用于 clangd config.yaml 的 PathMatch 覆盖(如 PROJ_A 项目的 ../Library、../EXTEND)。
+ * 用于 clangd config.yaml 的 PathMatch 覆盖(如构建目录做根的工程里 ../Library 一类公用目录)。
  */
 export function collectExternalSourceRoots(configData: any, rootDir: string): string[] {
     const normalizedRoot = path.resolve(rootDir);
@@ -286,7 +284,7 @@ export interface ReferenceAuditItem {
 /**
  * 体检项目配置中的全部相对路径引用:
  *  - 出根引用(解析后位于项目根之外)= 外部/公用目录;
- *  - 不存在的引用 = 断链(如 PROJ_A 项目的 `../Library`);
+ *  - 不存在的引用 = 断链(实测背景:公用库目录被移走后的 `../Library`);
  *  - 项目内引用不进入报告。
  */
 export function auditExternalReferences(

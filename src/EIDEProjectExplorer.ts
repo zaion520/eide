@@ -81,6 +81,7 @@ import {
     computeLevelDelta, findProjectRootsUnder, rewriteConfigRelativePaths, auditExternalReferences,
     rewriteEmbeddedAbsolutePaths,
 } from './ProjectRootTool';
+import { EIDE_DIR as EIDE_DIR_CONST, PROJECT_CONFIG_FILE_NAME } from './ProjectConsts';
 import {
     isV42Skeleton, assembleFromSkeleton, splitIntoSkeleton, packTargetForDisk, exportProjectAsV41,
 } from './ProjectStorageV42';
@@ -674,14 +675,14 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             GlobalEvent.show_msgbox('Warning', `Relocate only supports moving the project root up or down along its own directory chain !`);
             return;
         }
-        if (fs.existsSync(NodePath.join(newRoot, '.eide'))) {
-            GlobalEvent.show_msgbox('Warning', `Target directory already contains an '.eide' folder !`);
+        if (fs.existsSync(NodePath.join(newRoot, EIDE_DIR_CONST))) {
+            GlobalEvent.show_msgbox('Warning', `Target directory already contains an '${EIDE_DIR_CONST}' folder !`);
             return;
         }
 
         // 前置校验:必须已是 v4.2 布局(打开旧项目时会先自动迁移)
-        const oldEideDir = NodePath.join(oldRoot, '.eide');
-        const oldCfgText = fs.readFileSync(NodePath.join(oldEideDir, 'eide.yml'), 'utf8');
+        const oldEideDir = NodePath.join(oldRoot, EIDE_DIR_CONST);
+        const oldCfgText = fs.readFileSync(NodePath.join(oldEideDir, PROJECT_CONFIG_FILE_NAME), 'utf8');
         if (!isV42Skeleton(yaml.parse(oldCfgText))) {
             GlobalEvent.show_msgbox('Warning', `Project file is not v4.2 layout, please reload the project and try again !`);
             return;
@@ -710,14 +711,14 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 catch { fs.cpSync(from, to, { recursive: true }); fs.rmSync(from, { recursive: true, force: true }); }
             };
             const wsFiles = fs.readdirSync(oldRoot).filter((f) => f.endsWith('.code-workspace'));
-            moveDir(oldEideDir, NodePath.join(newRoot, '.eide'));
-            moveDir(NodePath.join(oldRoot, '.vscode'), NodePath.join(newRoot, '.vscode'));
+            moveDir(oldEideDir, NodePath.join(newRoot, EIDE_DIR_CONST));
+            moveDir(NodePath.join(oldRoot, AbstractProject.vsCodeDir), NodePath.join(newRoot, AbstractProject.vsCodeDir));
             for (const ws of wsFiles) {
                 try { fs.renameSync(NodePath.join(oldRoot, ws), NodePath.join(newRoot, ws)); } catch { /* ignore */ }
             }
 
             // 3. mechanically rewrite relative paths in the v4.2 layout
-            const newEideDir = NodePath.join(newRoot, '.eide');
+            const newEideDir = NodePath.join(newRoot, EIDE_DIR_CONST);
 
             // 3a. rewrite absolute paths embedded in JSON/JSONC configs
             // (.code-workspace 内嵌 settings、.vscode/settings.json):这些文件里
@@ -739,14 +740,14 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 }
             };
             for (const ws of wsFiles) { rewriteJsoncFile(NodePath.join(newRoot, ws)); }
-            rewriteJsoncFile(NodePath.join(newRoot, '.vscode', 'settings.json'));
+            rewriteJsoncFile(NodePath.join(newRoot, AbstractProject.vsCodeDir, 'settings.json'));
 
             if (embeddedRewrites.length > 0) {
                 GlobalEvent.log_info(`--- Embedded absolute paths rewritten for '${newRoot}' ---`);
                 for (const line of embeddedRewrites) { GlobalEvent.log_info(line); }
             }
 
-            const skeleton = yaml.parse(fs.readFileSync(NodePath.join(newEideDir, 'eide.yml'), 'utf8'));
+            const skeleton = yaml.parse(fs.readFileSync(NodePath.join(newEideDir, PROJECT_CONFIG_FILE_NAME), 'utf8'));
             const targetFiles: { name: string; data: any }[] = [];
             for (const name of <string[]>(<unknown>skeleton.targets)) {
                 targetFiles.push({
@@ -762,7 +763,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             }
             config.targets = packedTargets;
             const { skeleton: newSkeleton, targetFiles: newTargetFiles } = splitIntoSkeleton(config);
-            fs.writeFileSync(NodePath.join(newEideDir, 'eide.yml'), yaml.stringify(newSkeleton, { indent: 2, lineWidth: 1000 }));
+            fs.writeFileSync(NodePath.join(newEideDir, PROJECT_CONFIG_FILE_NAME), yaml.stringify(newSkeleton, { indent: 2, lineWidth: 1000 }));
             for (const t of newTargetFiles) {
                 const f = NodePath.join(newEideDir, 'targets', t.name, `${t.name}.yml`);
                 fs.writeFileSync(f, yaml.stringify(t.data, { indent: 2, lineWidth: 1000 }));
@@ -820,7 +821,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         }
 
         const eideDir = prj.getEideDir().path;
-        const cfgFile = NodePath.join(eideDir, 'eide.yml');
+        const cfgFile = NodePath.join(eideDir, PROJECT_CONFIG_FILE_NAME);
         if (!fs.existsSync(cfgFile) || !isV42Skeleton(yaml.parse(fs.readFileSync(cfgFile, 'utf8')))) {
             GlobalEvent.show_msgbox('Warning',
                 `This project is not in the v4.2 layout, no need to export.`);

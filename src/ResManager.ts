@@ -23,6 +23,7 @@
 */
 
 import { File } from "../lib/node-utility/File";
+import { EIDE_HOME_DIR_NAME } from "./ProjectConsts";
 import { WorkspaceManager } from "./WorkspaceManager";
 import { GlobalEvent } from "./GlobalEvents";
 import { exeSuffix, GetLocalCodePage, osType, getArchId, userhome, find } from "./Platform";
@@ -344,7 +345,7 @@ export class ResManager extends events.EventEmitter {
 
     getPython3(): string {
         if (osType() == 'win32') {
-            return File.from(userhome(), '.eide', 'bin', 'python36', 'python3.exe').path;
+            return File.from(userhome(), EIDE_HOME_DIR_NAME, 'bin', 'python36', 'python3.exe').path;
         } else {
             return find('python3') || 'python';
         }
@@ -361,7 +362,7 @@ export class ResManager extends events.EventEmitter {
     }
 
     getEideHomeFolder(): File {
-        return File.fromArray([userhome(), '.eide']);
+        return File.fromArray([userhome(), EIDE_HOME_DIR_NAME]);
     }
 
     getBuiltInToolsDir(): File {
@@ -369,7 +370,7 @@ export class ResManager extends events.EventEmitter {
     }
 
     getEideToolsInstallDir(): string {
-        return [userhome(), '.eide', 'tools'].join(File.sep);
+        return [userhome(), EIDE_HOME_DIR_NAME, 'tools'].join(File.sep);
     }
 
     GetLogDir(): File {
@@ -746,7 +747,7 @@ export class ResManager extends events.EventEmitter {
             this.dirMap.set(key, dir);
         }
 
-        const eideHome = File.fromArray([userhome(), '.eide']);
+        const eideHome = File.fromArray([userhome(), EIDE_HOME_DIR_NAME]);
         eideHome.CreateDir(); // create if not existed
         for (const key in eideBinariesDirs) {
             const dir = File.fromArray([eideHome.path, eideBinariesDirs[key]]);

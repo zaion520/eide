@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import type { ProjectTargetInfo } from './EIDETypeDefine';
-import { EIDE_CONF_VERSION_V41 } from './ProjectConsts';
+import { EIDE_CONF_VERSION_V41, PROJECT_CONFIG_FILE_NAME } from './ProjectConsts';
 import { getTargetLibsFileName, getTargetOptionBytesFileName } from './TargetSidecars';
 
 export const EIDE_CONF_VERSION_V42 = '4.2';
@@ -352,7 +352,7 @@ export interface DowngradeExportResult {
  * (或直接用 `eide.v4.1.bak.yml` 恢复迁移前状态)。
  */
 export function exportProjectAsV41(eideDir: string): DowngradeExportResult {
-    const cfgFilePath = path.join(eideDir, 'eide.yml');
+    const cfgFilePath = path.join(eideDir, PROJECT_CONFIG_FILE_NAME);
     const parsed = yaml.parse(fs.readFileSync(cfgFilePath, 'utf8'));
     if (!isV42Skeleton(parsed)) {
         throw Error(`Not a v4.2 project: '${cfgFilePath}'. Nothing to downgrade.`);

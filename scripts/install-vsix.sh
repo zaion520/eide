@@ -34,13 +34,71 @@ MAX_PASSES="${MAX_PASSES:-3}"          # robocopy 最多执行几趟(增量补�
 ROBO_RETRY="${ROBO_RETRY:-1}"          # /R: 单文件失败重试次数(默认无穷大, 必须限制)
 ROBO_WAIT="${ROBO_WAIT:-1}"            # /W: 重试间隔(秒)
 
-REPO="/c/Users/XC/Desktop/eide-master"
-EXT_DIR="$HOME/.vscode/extensions"
-EXT_DIR_M="$(cygpath -m "$EXT_DIR")"   # 给 node 用的 Windows 混合路径(C:/Users/...)
-VSIX="$REPO/eide-$VER.vsix"
-WORK="/c/Users/XC/AppData/Local/Temp/eide-install-$VER"
-TARGET="$EXT_DIR/cl.eide-$VER"
-BSDTAR="/c/Windows/System32/tar.exe"
+# ---- 路径自定位(不写死任何机器/用户相关路径, 全部可被环境变量覆盖) ----
+# REPO: 本脚本所在 scripts/ 的上一级; 不再写死作者机器上的仓库位置
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${EIDE_REPO:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+# 给 node 用的路径形式: MSYS 下 '/c/x' 需要转成 'C:/x'(node 不认前者)。
+# 非 MSYS 环境 cygpath 不存在, 原样返回。
+to_node_path() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+# 从 package.json 读字段, 避免在脚本里写死扩展名/产物名
+pkg_field() {
+    node -e "
+try { const p = require(process.argv[1]); const v = process.argv[2].split('.').reduce((o,k)=>o&&o[k], p);
+      if (v !== undefined && v !== null) process.stdout.write(String(v)); } catch (e) {}
+" "$(to_node_path "$REPO/package.json")" "$1" 2>/dev/null || true
+}
+
+# 扩展目录: 优先 $EIDE_EXT_DIR; 否则按平台推导 VSCode 的扩展目录
+if [ -n "${EIDE_EXT_DIR:-}" ]; then
+    EXT_DIR="$EIDE_EXT_DIR"
+elif [ -n "${VSCODE_EXTENSIONS:-}" ]; then
+    EXT_DIR="$VSCODE_EXTENSIONS"          # VSCode 自身也认这个变量
+else
+    case "$(uname -s)" in
+        Darwin) EXT_DIR="$HOME/.vscode/extensions" ;;
+        Linux)  EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/.vscode/extensions" ;;
+        *)      EXT_DIR="$HOME/.vscode/extensions" ;;   # Windows(Git Bash/MSYS)
+    esac
+fi
+[ -d "$EXT_DIR" ] || EXT_DIR="$HOME/.vscode/extensions"
+
+# 临时工作目录: 用系统临时目录(优先 TMPDIR/TEMP), 不写死作者机器的 AppData 路径
+TMP_BASE="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}"
+WORK="${EIDE_INSTALL_WORK:-$(cygpath -u "$TMP_BASE" 2>/dev/null || echo "$TMP_BASE")/eide-install-$VER}"
+
+# 扩展标识(publisher.name)与目录名从 package.json 推导, 不写死 'cl.eide'
+PUBLISHER="$(pkg_field publisher)"
+PKG_NAME="$(pkg_field name)"
+[ -n "$PUBLISHER" ] && [ -n "$PKG_NAME" ] || { echo "无法从 $REPO/package.json 读取 publisher/name"; exit 1; }
+EXT_ID="$PUBLISHER.$PKG_NAME"
+EXT_DIR_NAME="$EXT_ID-$VER"
+
+VSIX="$REPO/$PKG_NAME-$VER.vsix"
+TARGET="$EXT_DIR/$EXT_DIR_NAME"
+
+# bsdtar: Git Bash 自带的 tar 是 GNU tar(会把 C:/ 当远程主机), 必须用 bsdtar。
+# 依次探测: 环境变量 → PATH 里的 bsdtar → Windows 自带 tar → GNU tar 兜底。
+detect_bsdtar() {
+    if [ -n "${EIDE_BSDTAR:-}" ] && [ -x "${EIDE_BSDTAR}" ]; then echo "$EIDE_BSDTAR"; return; fi
+    if command -v bsdtar >/dev/null 2>&1; then command -v bsdtar; return; fi
+    for c in /c/Windows/System32/tar.exe /usr/bin/bsdtar /usr/bin/tar; do
+        if [ -x "$c" ]; then
+            # 确认它是 bsdtar(能识别 -a 自动压缩)或至少不是会误解析 C:/ 的 GNU tar
+            if "$c" --version 2>&1 | grep -qi 'bsdtar\|libarchive'; then echo "$c"; return; fi
+        fi
+    done
+    command -v tar 2>/dev/null || true
+}
+BSDTAR="$(detect_bsdtar)"
+[ -n "$BSDTAR" ] || { echo "找不到可用的 tar/bsdtar(Git Bash 请确保 C:\\Windows\\System32\\tar.exe 存在)"; exit 1; }
+
+# MSYS 会把命令行里的 /X 当路径改写 → 调原生 Windows 工具(robocopy/cygpath)前统一置位
+export MSYS_NO_PATHCONV=1
 
 step() { echo "[$(date '+%H:%M:%S')] $*"; }
 
@@ -80,22 +138,32 @@ retry_robocopy() {
 [ -d "$EXT_DIR" ] || { echo "找不到扩展目录 $EXT_DIR"; exit 1; }
 
 # 写入 extensions.json 注册当前版本
+# 说明: VSCode 的 location.path 期望 "<drive>:/<posix 路径>" 形式(如 c:/Users/x/.vscode/…),
+# 该值由 EXT_DIR 现场推导, 不写死任何机器路径。
 register_extension() {
-    local ts
+    local ts ext_dir_m loc_path
     ts=$(date +%s%3N)
+    ext_dir_m="$(to_node_path "$EXT_DIR")"                   # '<盘符>:/posix/路径' 形式
+    # VSCode 的 location.path 形如 '<小写盘符>:/posix/路径'(非 Windows 平台为普通绝对路径)
+    loc_path="$(node -e "
+const p = process.argv[1].replace(/\\\\/g, '/');
+process.stdout.write(p.replace(/^([A-Za-z]):/, (m, d) => d.toLowerCase() + ':'));
+" "$ext_dir_m/$EXT_DIR_NAME" 2>/dev/null)"
+    [ -n "$loc_path" ] || { echo "无法推导扩展注册路径"; exit 1; }
+
     node -e "
 const fs = require('fs');
-const p = '$EXT_DIR_M/extensions.json';
+const p = process.argv[1];
 const list = JSON.parse(fs.readFileSync(p, 'utf8'));
-const e = list.find(x => x.identifier && x.identifier.id === 'cl.eide');
-if (!e) { console.error('extensions.json 里找不到 cl.eide'); process.exit(1); }
-e.version = '$VER';
-e.location = { \$mid: 1, path: '/c:/Users/XC/.vscode/extensions/cl.eide-$VER', scheme: 'file' };
-e.relativeLocation = 'cl.eide-$VER';
-if (e.metadata) e.metadata.installedTimestamp = $ts;
+const e = list.find(x => x.identifier && x.identifier.id === process.argv[2]);
+if (!e) { console.error('extensions.json 里找不到 ' + process.argv[2]); process.exit(1); }
+e.version = process.argv[3];
+e.location = { \$mid: 1, path: process.argv[4], scheme: 'file' };
+e.relativeLocation = process.argv[5];
+if (e.metadata) e.metadata.installedTimestamp = Number(process.argv[6]);
 fs.writeFileSync(p, JSON.stringify(list));
-console.log('    已注册 cl.eide -> $VER');
-" || exit 1
+console.log('    已注册 ' + process.argv[2] + ' -> ' + process.argv[3]);
+" "$ext_dir_m/extensions.json" "$EXT_ID" "$VER" "$loc_path" "$EXT_DIR_NAME" "$ts" || exit 1
 }
 
 # ---- 并发锁 ----
@@ -135,7 +203,7 @@ if [ -f "$MARKER" ] && [ -f "$TARGET/dist/extension.js" ]; then
         step "检测到 $VER 已完整安装($CUR_COUNT 文件, 与 vsix 同版本), 跳过构建与复制"
         register_extension
         echo
-        echo "✅ 已是最新: cl.eide-$VER ($CUR_COUNT 文件) —— 请在 VSCode 执行 Reload Window"
+        echo "✅ 已是最新: $EXT_ID-$VER ($CUR_COUNT 文件) —— 请在 VSCode 执行 Reload Window"
         exit 0
     fi
 fi
@@ -150,8 +218,8 @@ step "1/5 解压完成"
 
 # ---- 2) 注入 node_modules(取已装的最新一版作为来源) ----
 SRC_NM=""
-for d in $(ls -d "$EXT_DIR"/cl.eide-* 2>/dev/null | sort -V -r); do
-    if [ -d "$d/node_modules" ] && [ "$(basename "$d")" != "cl.eide-$VER" ]; then
+for d in $(ls -d "$EXT_DIR/$EXT_ID"-* 2>/dev/null | sort -V -r); do
+    if [ -d "$d/node_modules" ] && [ "$(basename "$d")" != "$EXT_DIR_NAME" ]; then
         SRC_NM="$d/node_modules"; break
     fi
 done
@@ -186,7 +254,7 @@ SRC_COUNT=$(find extension -type f | wc -l)
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
 
 STAGE_ROOT="$WORK/stage-$VER"
-STAGING="$STAGE_ROOT/cl.eide-$VER"
+STAGING="$STAGE_ROOT/$EXT_DIR_NAME"
 mkdir -p "$STAGE_ROOT"
 
 step "4/5 暂存完整副本到同卷临时目录 (每趟 ${TIMEOUT_SEC}s)"
@@ -232,5 +300,5 @@ step "5/5 完成"
 echo "$VER $DST_COUNT $(stat -c %Y "$VSIX" 2>/dev/null || echo 0)" > "$MARKER"
 
 echo
-echo "✅ 安装完成: cl.eide-$VER ($DST_COUNT 文件)"
+echo "✅ 安装完成: $EXT_ID-$VER ($DST_COUNT 文件)"
 echo "   请在 VSCode 执行 Reload Window 生效"

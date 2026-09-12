@@ -12,7 +12,15 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { EIDE_DIR } from './ProjectConsts';
+import { EIDE_DIR, PROJECT_CONFIG_FILE_NAMES } from './ProjectConsts';
+
+/** 是否为一个 EIDE 项目根目录(存在 .eide/<配置文件> 之一) */
+function isProjectRootDir(dir: string): boolean {
+    for (const name of PROJECT_CONFIG_FILE_NAMES) {
+        if (fs.existsSync(path.join(dir, EIDE_DIR, name))) { return true; }
+    }
+    return false;
+}
 
 // ---------------------------------------------------------------------------
 // command line token utils
@@ -551,12 +559,18 @@ export function toCompilationDatabaseEntry(
  * 目录改名后配置文件落在项目根(与 .code-workspace 同目录),且同卷 rename
  * 可原样保留后台索引缓存(migrateCdbDirToClangd)。
  */
+/** CDB 收拢目录名(方案 D)。clangd 22.1.6 实测 `.clangd` 只认文件不认目录,目录让名后取此名 */
+export const PROJECT_CDB_DIR_NAME = 'clangd';
+
+/** 编译数据库文件名(CDB 目录内的单文件,由本管线全权管理) */
+export const CDB_FILE_NAME = 'compile_commands.json';
+
 export function getProjectDbDir(rootDir: string): string {
-    return path.join(rootDir, 'clangd');
+    return path.join(rootDir, PROJECT_CDB_DIR_NAME);
 }
 
 export function getProjectDbPath(rootDir: string): string {
-    return path.join(getProjectDbDir(rootDir), 'compile_commands.json');
+    return path.join(getProjectDbDir(rootDir), CDB_FILE_NAME);
 }
 
 /** 旧布局的 CDB 目录名(升级时改名为 `clangd/`, 见 migrateCdbDirToClangd) */
@@ -657,7 +671,7 @@ export function isDirAncestorOf(configDir: string, filePath: string): boolean {
  * 只是构建目录(MDK/KEIL),源码在**根之外**的兄弟目录(如 `code/MDK` 是根、
  * `code/Basic`、`code/lvgl` 才是源码)。clangd 的 `.clangd` 查找是沿文件的
  * 祖先链向上的,因此根内的 `.clangd` 对这些根外文件**完全不可见**,编译数据库
- * 从未被加载(实测 `DSP/PROJ_M/code/MDK`:303 条条目 100% 在根外,clangd 完全
+ * 从未被加载(实测某真实工程(构建目录做根):303 条条目 100% 在根外,clangd 完全
  * 不加载 CDB,表现与"配置丢失"一致的满屏波浪线)。旧布局靠用户级 PathMatch
  * 正则覆盖全盘,与文件位置无关,所以问题只在方案 D 之后出现。
  *
@@ -706,10 +720,13 @@ export function resolveClangdProjectConfigDirFor(
     return { configDir: ancestor, relocated: true, reason: `covers ${uncovered.length} out-of-root source(s)` };
 }
 
-/** 目录子树内是否存在**其他** EIDE 项目根(有 .eide/eide.yml 的目录) */
+/** 目录子树内是否存在**其他** EIDE 项目根(有 .eide/<配置文件> 的目录) */
 export function hasForeignProjectRootUnder(dir: string, excludeRoot: string): boolean {
     const excludeLower = path.resolve(excludeRoot).toLowerCase();
     const stack: { dir: string; depth: number }[] = [{ dir: path.resolve(dir), depth: 0 }];
+    // 子树扫描深度上限:只为了发现"近邻的兄弟项目根"(如 <root>/KEIL/Keil_project),
+    // 过深会在巨型目录树上做无谓的磁盘遍历。若真实布局出现更深的项目根,
+    // 损失的只是一次保守回退(配置留在项目根),不会产生错误行为。
     const MAX_DEPTH = 4;
 
     while (stack.length > 0) {
@@ -717,7 +734,7 @@ export function hasForeignProjectRootUnder(dir: string, excludeRoot: string): bo
         if (depth > MAX_DEPTH) { continue; }
         const curLower = cur.toLowerCase();
         // 自身即其他项目根(.eide 与 clangd 同一层,如 `<root>/KEIL/Keil_project`)
-        if (curLower !== excludeLower && fs.existsSync(path.join(cur, EIDE_DIR, 'eide.yml'))) {
+        if (curLower !== excludeLower && isProjectRootDir(cur)) {
             return true;
         }
         if (depth === MAX_DEPTH) { continue; }
@@ -1164,10 +1181,10 @@ export function isManagedBlockStale(
  *
  * 背景(实测根因):受管块可含多个 `If: PathMatch` 片段(历史版本为
  * "项目根 + 根外源码目录"各渲染一个)。旧版对根外目录生成的正则可能是
- * **祖先级通配**,例如 `^[dD]:/projects/.*$` —— 它匹配该目录下
+ * **祖先级通配**,例如 `^[dD]:/work/.*$` —— 它匹配该目录下
  * **所有**项目,于是同一份 config.yaml 里后出现的这个片段会把兄弟项目的
- * 编译数据库全部截胡(实测:DSP 项目被 PROJ_C 的片段命中,clangd 拿
- * PROJ_C 的 AC5 命令去解析 DSP 的 AC6 源码,满屏 `file not found`)。
+ * 编译数据库全部截胡(实测:兄弟项目被祖先通配片段命中,clangd 拿
+ * 一个工具链的命令去解析另一工具链的源码,满屏 `file not found`)。
  *
  * 判定:块的标记行携带 token(= 该块所属项目根的 base64),把 token 解出
  * 来的根记为 `ownerRoot`。**若某片段路径是 ownerRoot 的严格祖先**,

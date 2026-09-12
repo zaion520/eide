@@ -37,7 +37,7 @@ import { CppToolsApi, Version, CustomConfigurationProvider, getCppToolsApi, Sour
 import { File } from '../lib/node-utility/File';
 import { FileWatcher } from '../lib/node-utility/FileWatcher';
 import { RefreshStateMachine, RefreshState } from './RefreshStateMachine';
-import { EIDE_DIR as EIDE_DIR_CONST, HEADER_FILE_FILTER, CPP_FILE_FILTER, LIB_FILE_FILTER, ASM_FILE_FILTER } from './ProjectConsts';
+import { EIDE_DIR as EIDE_DIR_CONST, PROJECT_CONFIG_FILE_NAME, LEGACY_PROJECT_CONFIG_FILE_NAME, HEADER_FILE_FILTER, CPP_FILE_FILTER, LIB_FILE_FILTER, ASM_FILE_FILTER } from './ProjectConsts';
 import { TargetManager, TargetManagerHost, TargetEventType, TargetSnapshotContext, TargetRestoreContext, TargetSwitchResult } from './TargetManager';
 import { getTargetLibsFileName, getTargetOptionBytesFileName, removeIniSection, renameIniSection, copyIniSection } from './TargetSidecars';
 import { updateClangdIntegration } from './clangdIntegration';
@@ -572,7 +572,7 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
     static readonly EIDE_DIR: string = EIDE_DIR_CONST;
 
     static readonly cppConfigName = 'c_cpp_properties.json';
-    static readonly prjConfigName = 'eide.yml';
+    static readonly prjConfigName = PROJECT_CONFIG_FILE_NAME;
 
     static readonly importerWarningBaseName = 'importer.warning.txt';
 
@@ -3094,7 +3094,7 @@ $(OUT_DIR):
             conf.version = '4.1';
             eideFile.Write(ProjectConfiguration.dumpProjectFile(conf));
             // rm old eide.json file
-            const eideJsonFile = File.from(wsFile.dir, AbstractProject.EIDE_DIR, 'eide.json');
+            const eideJsonFile = File.from(wsFile.dir, AbstractProject.EIDE_DIR, LEGACY_PROJECT_CONFIG_FILE_NAME);
             if (eideJsonFile.IsExist())
                 fs.unlinkSync(eideJsonFile.path);
 
@@ -4139,7 +4139,7 @@ class EIDEProject extends AbstractProject {
         // !! we need deleted global c_cpp_properties.json !!
         {
             const cfgFile = File.fromArray([
-                this.GetRootDir().path, '.vscode', AbstractProject.cppConfigName
+                this.GetRootDir().path, AbstractProject.vsCodeDir, AbstractProject.cppConfigName
             ]);
 
             if (cfgFile.IsFile()) {
@@ -4163,7 +4163,7 @@ class EIDEProject extends AbstractProject {
 
         // delete '.eide/log' folder
         if (this.isNewProject || this.isOldVersionProject) {
-            const _d = File.from(this.getRootDir().path, '.eide', 'log');
+            const _d = File.from(this.getRootDir().path, AbstractProject.EIDE_DIR, 'log');
             if (_d.IsDir()) {
                 try {
                     platform.DeleteDir(_d);

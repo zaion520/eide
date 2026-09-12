@@ -43,6 +43,8 @@ import {
     isEideManagedProjectConfig,
     migrateCdbDirToClangd,
     PROJECT_CLANGD_CONFIG_NAME,
+    PROJECT_CDB_DIR_NAME,
+    CDB_FILE_NAME,
     sanitizeClangdUserConfig,
     upsertClangdWorkspaceArgs,
     isC51Toolchain,
@@ -252,7 +254,7 @@ function getClangdUserConfigDir(): string | undefined {
 
 /** 工具链关键字 shim 的存放目录:`.eide/clangd/`(库本身已上移项目根,shim 不再跟库同目录) */
 function getClangdShimDir(prj: AbstractProject): string {
-    return path.join(prj.getEideDir().path, 'clangd');
+    return path.join(prj.getEideDir().path, PROJECT_CDB_DIR_NAME);
 }
 
 function writeIfChanged(filePath: string, content: string): boolean {
@@ -470,7 +472,7 @@ export function cleanupLegacyClangdArtifacts(prj: AbstractProject): boolean {
     const rootDir = prj.getProjectRoot().path;
     const legacyTargets = [
         { p: path.join(rootDir, '.eide-clangd'), note: `legacy clangd output dir '.eide-clangd'` },
-        { p: path.join(rootDir, 'compile_commands.json'), note: `legacy root-level compile_commands.json` },
+        { p: path.join(rootDir, CDB_FILE_NAME), note: `legacy root-level ${CDB_FILE_NAME}` },
         { p: path.join(rootDir, '.cache'), note: `legacy root-level '.cache' index dir` }
     ];
     for (const item of legacyTargets) {

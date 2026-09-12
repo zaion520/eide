@@ -33,6 +33,7 @@ import { WorkspaceManager } from "./WorkspaceManager";
 import { CmdLineHandler } from "./CmdLineHandler";
 import { ExceptionToMessage, newMessage } from "./Message";
 import { NetRequest, NetResponse } from '../lib/node-utility/NetRequest';
+import { EIDE_DIR } from './ProjectConsts';
 import { File } from '../lib/node-utility/File';
 import { GitFileInfo } from './WebInterface/GithubInterface';
 import * as platform from './Platform';
@@ -301,7 +302,7 @@ export function openocd_getConfigList(category: 'interface' | 'target', projectR
     // find in workspace
     const wsFolder = projectRootDir;
     if (wsFolder) {
-        for (const path of ['.', '.eide', 'tools']) {
+        for (const path of ['.', EIDE_DIR, 'tools']) {
             const cfgFolder = File.fromArray([wsFolder.path, path]);
             if (cfgFolder.IsDir()) {
                 cfgFolder.GetList([/\.cfg$/i], File.EXCLUDE_ALL_FILTER).forEach((file) => {

@@ -3,6 +3,7 @@ import * as os from "os";
 import * as fs from "fs";
 import { File } from "../lib/node-utility/File";
 import { EIDE_CONF_VERSION } from './EIDETypeDefine';
+import { EIDE_DIR, PROJECT_CONFIG_FILE_NAME, LEGACY_PROJECT_CONFIG_FILE_NAME } from './ProjectConsts';
 import { ProjectConfiguration } from './ProjectConfiguration';
 import { compareVersion } from "./utility";
 import { view_str$prompt$migrationFailed } from "./StringTable";
@@ -10,9 +11,9 @@ import { GlobalEvent } from "./GlobalEvents";
 import { getGlobalState } from "./Platform";
 
 export function detectProject(dir: File): boolean {
-    if (File.IsExist(NodePath.join(dir.path, '.eide', 'eide.yml')))
+    if (File.IsExist(NodePath.join(dir.path, EIDE_DIR, PROJECT_CONFIG_FILE_NAME)))
         return true;
-    if (File.IsExist(NodePath.join(dir.path, '.eide', 'eide.json')))
+    if (File.IsExist(NodePath.join(dir.path, EIDE_DIR, LEGACY_PROJECT_CONFIG_FILE_NAME)))
         return true;
     return false;
 }
@@ -20,8 +21,8 @@ export function detectProject(dir: File): boolean {
 async function _doMigration(projectRootDir: File) {
 
     // move eide.json to eide.yml
-    const eideJsonFile = File.from(projectRootDir.path, '.eide', 'eide.json');
-    const projCfgFile = File.from(projectRootDir.path, '.eide', 'eide.yml');
+    const eideJsonFile = File.from(projectRootDir.path, EIDE_DIR, LEGACY_PROJECT_CONFIG_FILE_NAME);
+    const projCfgFile = File.from(projectRootDir.path, EIDE_DIR, PROJECT_CONFIG_FILE_NAME);
     if (eideJsonFile.IsExist()) {
         const obj = ProjectConfiguration.parseProjectFile(eideJsonFile.Read());
         projCfgFile.Write(ProjectConfiguration.dumpProjectFile(obj));

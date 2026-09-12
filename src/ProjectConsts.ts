@@ -36,6 +36,18 @@
 /** 项目元数据目录名 */
 export const EIDE_DIR = '.eide';
 
+/** EIDE 用户级主目录名(`~/.eide`,存放工具链/日志/Python 等;与项目内元数据目录同名,位置在用户主目录) */
+export const EIDE_HOME_DIR_NAME = EIDE_DIR;
+
+/** 项目配置文件名(各版本解析顺序: 先新后旧) */
+export const PROJECT_CONFIG_FILE_NAMES = ['eide.yml', 'eide.json'];
+
+/** 项目配置文件当前名 */
+export const PROJECT_CONFIG_FILE_NAME = PROJECT_CONFIG_FILE_NAMES[0];
+
+/** 旧版项目配置文件名的别名(仅迁移/兼容读取使用) */
+export const LEGACY_PROJECT_CONFIG_FILE_NAME = PROJECT_CONFIG_FILE_NAMES[1];
+
 /** 头文件后缀匹配(用于"哪些文件算头文件"的统一判定) */
 export const HEADER_FILE_FILTER: RegExp = /\.(?:h|hxx|hpp|inc)$/i;
 
