@@ -12,6 +12,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { EIDE_DIR } from './ProjectConsts';
 
 // ---------------------------------------------------------------------------
 // command line token utils
@@ -602,6 +603,137 @@ export function resolveClangdProjectConfigDir(rootDir: string): string {
         // readdir 失败按回退处理
     }
     return rootDir;
+}
+
+/**
+ * 计算一组文件的**公共祖先目录**(按路径段比较,兼容 `\` 与 `/` 两种写法)。
+ * 返回原生分隔符的路径;undefined 表示无公共祖先(如跨盘符或输入为空)。
+ */
+export function commonAncestorDir(filePaths: string[]): string | undefined {
+    const dirs = (filePaths || [])
+        .map((p) => path.dirname(path.normalize(String(p || ''))))
+        .filter((d) => d && d !== '.');
+    if (dirs.length === 0) { return undefined; }
+
+    const segs = dirs.map((d) => d.replace(/\\/g, '/').split('/'));
+    const first = segs[0];
+    // Windows/macOS 默认大小写不敏感;Linux 敏感
+    const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+    const norm = (s: string) => (caseInsensitive ? s.toLowerCase() : s);
+
+    let n = 0;
+    outer: for (; n < first.length; n++) {
+        const want = norm(first[n]);
+        for (const s of segs) {
+            if (s.length <= n) { break outer; }
+            if (norm(s[n]) !== want) { break outer; }
+        }
+    }
+    if (n === 0) { return undefined; }
+    // 用首段的原始大小写拼回,并按当前平台的分隔符返回
+    const joined = first.slice(0, n).join('/');
+    return joined ? path.normalize(joined) : undefined;
+}
+
+/**
+ * 判断 clangd 能否把 `configDir` 处的 `.clangd` 应用到 `filePath`。
+ *
+ * **关键语义**(实测确认):clangd 只会从**文件自身的祖先目录链**向上查找
+ * `.clangd`,所以配置文件必须位于文件的某个祖先目录 —— 放在"兄弟目录"
+ * (哪怕同属一个项目)对根外源码完全不可见。
+ */
+export function isDirAncestorOf(configDir: string, filePath: string): boolean {
+    const c = path.resolve(configDir).replace(/\\/g, '/').replace(/\/+$/, '');
+    const f = path.resolve(path.dirname(filePath)).replace(/\\/g, '/').replace(/\/+$/, '');
+    const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    if (eq(c, f)) { return true; }
+    return f.toLowerCase().startsWith(`${c.toLowerCase()}/`);
+}
+
+/**
+ * 解析**项目级 `.clangd` 应放的位置**,使其对全部 CDB 条目都生效。
+ *
+ * 背景(实测根因):方案 D 起初把 `.clangd` 放在项目根,但不少工程的项目根
+ * 只是构建目录(MDK/KEIL),源码在**根之外**的兄弟目录(如 `code/MDK` 是根、
+ * `code/Basic`、`code/lvgl` 才是源码)。clangd 的 `.clangd` 查找是沿文件的
+ * 祖先链向上的,因此根内的 `.clangd` 对这些根外文件**完全不可见**,编译数据库
+ * 从未被加载(实测 `DSP/PROJ_M/code/MDK`:303 条条目 100% 在根外,clangd 完全
+ * 不加载 CDB,表现与"配置丢失"一致的满屏波浪线)。旧布局靠用户级 PathMatch
+ * 正则覆盖全盘,与文件位置无关,所以问题只在方案 D 之后出现。
+ *
+ * 规则:默认放项目根;若存在 CDB 条目落在根外,则上移到"覆盖全部条目的
+ * 公共祖先"(前提是它仍在文件系统内且不是盘根)。上移位置必须满足:
+ *  - 仍是项目根的祖先(否则会去覆盖无关目录);
+ *  - 其下没有**其他** EIDE 项目根(避免抢走别人的配置)。
+ * 不满足时回退项目根(保持既有行为,交由调用方记录告警)。
+ */
+export function resolveClangdProjectConfigDirFor(
+    rootDir: string,
+    sourceAbsPaths: string[]
+): { configDir: string; relocated: boolean; reason: string } {
+
+    const fallback = resolveClangdProjectConfigDir(rootDir);
+    if (!sourceAbsPaths || sourceAbsPaths.length === 0) {
+        return { configDir: fallback, relocated: false, reason: 'no-sources' };
+    }
+
+    // 全部条目都被 fallback 覆盖 → 保持原位置
+    const uncovered = sourceAbsPaths
+        .map((p) => path.resolve(p))
+        .filter((p) => !isDirAncestorOf(fallback, p));
+    if (uncovered.length === 0) {
+        return { configDir: fallback, relocated: false, reason: 'all-covered' };
+    }
+
+    // 上移到"fallback + 根外文件"的公共祖先,使其覆盖全部条目
+    const ancestor = commonAncestorDir([path.join(fallback, 'x'), ...uncovered.map((p) => path.resolve(p))]);
+    if (!ancestor) {
+        return { configDir: fallback, relocated: false, reason: 'no-common-ancestor' };
+    }
+    // 必须仍覆盖项目根(避免配置跑到无关分支),且不能是盘根
+    if (!isDirAncestorOf(ancestor, path.join(path.resolve(rootDir), 'x'))) {
+        return { configDir: fallback, relocated: false, reason: 'ancestor-not-covering-root' };
+    }
+    const parent = path.dirname(ancestor);
+    if (!parent || parent === ancestor) {
+        return { configDir: fallback, relocated: false, reason: 'ancestor-is-drive-root' };
+    }
+    // 上移位置之下若有其他项目根,放置会抢走它们的配置 → 保守回退
+    if (hasForeignProjectRootUnder(ancestor, path.resolve(rootDir))) {
+        return { configDir: fallback, relocated: false, reason: 'foreign-project-root' };
+    }
+
+    return { configDir: ancestor, relocated: true, reason: `covers ${uncovered.length} out-of-root source(s)` };
+}
+
+/** 目录子树内是否存在**其他** EIDE 项目根(有 .eide/eide.yml 的目录) */
+export function hasForeignProjectRootUnder(dir: string, excludeRoot: string): boolean {
+    const excludeLower = path.resolve(excludeRoot).toLowerCase();
+    const stack: { dir: string; depth: number }[] = [{ dir: path.resolve(dir), depth: 0 }];
+    const MAX_DEPTH = 4;
+
+    while (stack.length > 0) {
+        const { dir: cur, depth } = stack.pop()!;
+        if (depth > MAX_DEPTH) { continue; }
+        const curLower = cur.toLowerCase();
+        // 自身即其他项目根(.eide 与 clangd 同一层,如 `<root>/KEIL/Keil_project`)
+        if (curLower !== excludeLower && fs.existsSync(path.join(cur, EIDE_DIR, 'eide.yml'))) {
+            return true;
+        }
+        if (depth === MAX_DEPTH) { continue; }
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(cur, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const e of entries) {
+            if (!e.isDirectory()) { continue; }
+            if (e.name.startsWith('.') || e.name === 'node_modules') { continue; }
+            stack.push({ dir: path.join(cur, e.name), depth: depth + 1 });
+        }
+    }
+    return false;
 }
 
 export interface ProjectClangdConfigInput {

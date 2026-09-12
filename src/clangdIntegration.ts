@@ -38,7 +38,9 @@ import {
     pruneStaleManagedBlocks,
     removeManagedBlocksAllFamilies,
     resolveClangdProjectConfigDir,
+    resolveClangdProjectConfigDirFor,
     upsertProjectClangdConfigFile,
+    isEideManagedProjectConfig,
     migrateCdbDirToClangd,
     PROJECT_CLANGD_CONFIG_NAME,
     sanitizeClangdUserConfig,
@@ -506,13 +508,58 @@ function fileSignature(filePath: string): string {
 }
 
 /**
- * 项目级 `.clangd` 配置文件(方案 D):落盘/幂等更新在项目根(或 .code-workspace 同目录)。
+ * 项目级 `.clangd` 配置文件(方案 D):落盘/幂等更新。
+ * 位置由 `resolveClangdProjectConfigDirFor` 决定:默认项目根;若本项目存在
+ * **根外源码**(项目根只是 MDK/KEIL 构建目录,源码在兄弟目录),则上移到能
+ * 覆盖全部 CDB 条目的公共祖先 —— clangd 只沿文件祖先链查找 `.clangd`,
+ * 放在根内的配置对根外源码完全不可见(实测会导致编译数据库从不加载)。
  * 存在性检测由 upsertProjectClangdConfigFile 承担:用户手写的文件不触碰;
  * 内容不含 target 信息 → 切 target 时内容不变,零写盘。
  */
 function updateProjectClangdConfigFile(prj: AbstractProject, toolchainName: string): boolean {
     const rootDir = prj.getProjectRoot().path;
-    const configDir = resolveClangdProjectConfigDir(rootDir);
+
+    // 读回刚生成的 CDB,取其条目解析出的绝对源码路径(判定覆盖范围的事实依据)
+    const sourceAbsPaths: string[] = [];
+    try {
+        const raw = fs.readFileSync(getProjectDbPath(rootDir), 'utf8');
+        const entries: any[] = JSON.parse(raw);
+        for (const e of entries) {
+            if (!e || typeof e.file !== 'string') { continue; }
+            const dir = e.directory ? String(e.directory) : rootDir;
+            sourceAbsPaths.push(path.resolve(dir, e.file));
+        }
+    } catch {
+        // CDB 缺失/损坏:回退既有位置(后续刷新会重建)
+    }
+
+    const resolved = resolveClangdProjectConfigDirFor(rootDir, sourceAbsPaths);
+    const configDir = resolved.configDir;
+    if (resolved.relocated) {
+        GlobalEvent.log_info(`project '.clangd' placed at '${configDir}' (${resolved.reason})`);
+        // 位置变更后,清理**上一版 EIDE 生成**的旧文件(仅当仍带 EIDE 标记),
+        // 否则同一项目会残留两份 CompilationDatabase 指针(旧的那份还会以
+        // "项目根的配置文件"身份参与 clangd 配置合并,造成事实源二义)。
+        // 用户手写的文件不带标记,绝不触碰。
+        const stalePath = path.join(resolveClangdProjectConfigDir(rootDir), PROJECT_CLANGD_CONFIG_NAME);
+        if (path.resolve(stalePath) !== path.resolve(path.join(configDir, PROJECT_CLANGD_CONFIG_NAME))) {
+            try {
+                if (fs.existsSync(stalePath) && fs.statSync(stalePath).isFile() &&
+                    isEideManagedProjectConfig(fs.readFileSync(stalePath, 'utf8'))) {
+                    fs.unlinkSync(stalePath);
+                    GlobalEvent.log_info(`stale EIDE '.clangd' at '${stalePath}' removed (superseded by the relocated one)`);
+                }
+            } catch (error) {
+                GlobalEvent.log_error(error);
+            }
+        }
+    } else if (resolved.reason.startsWith('no-common') || resolved.reason.startsWith('ancestor-') || resolved.reason === 'foreign-project-root') {
+        // 根外源码存在但无法安全上移:CDB 本身仍带着完整 flags,只是这几个文件
+        // 拿不到项目级配置 —— 明确告警,不要静默
+        GlobalEvent.log_warn(`project '.clangd' stays at '${configDir}' but ${resolved.reason}: ` +
+            `sources outside this directory may not get the compile database`);
+    }
+
     const configPath = path.join(configDir, PROJECT_CLANGD_CONFIG_NAME);
     // CompilationDatabase 相对配置文件所在目录解析(文档语义), POSIX 化
     const compilationDatabase = toPosix(path.relative(configDir, getProjectDbDir(rootDir)) || '.');

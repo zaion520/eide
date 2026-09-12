@@ -122,12 +122,17 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null; kill_robocopy' EXIT INT TERM
 # ---- 幂等快路径 ----
 # 目标目录已是本次要装的"完整"副本时, 跳过解压/重打包/暂存(全是耗时的全量 IO),
 # 只补一次注册 —— 重复执行从数十秒降到 ~2 秒。
+#
+# 注意: 判定必须带上 **vsix 的时间戳**, 不能只看版本号+文件数 ——
+# 同一版本重新打包(改完代码重跑)时文件数往往不变, 只看这两个会让
+# 陈旧代码被当成"已是最新"而静默跳过(实测踩过: 修完 bug 重装, 装上的还是旧包)。
 MARKER="$WORK/.installed-ok"
 if [ -f "$MARKER" ] && [ -f "$TARGET/dist/extension.js" ]; then
-    read -r MK_VER MK_COUNT < "$MARKER" 2>/dev/null || true
+    read -r MK_VER MK_COUNT MK_STAMP < "$MARKER" 2>/dev/null || true
     CUR_COUNT=$(find "$TARGET" -type f 2>/dev/null | wc -l)
-    if [ "$MK_VER" = "$VER" ] && [ "$MK_COUNT" = "$CUR_COUNT" ]; then
-        step "检测到 $VER 已完整安装($CUR_COUNT 文件), 跳过构建与复制"
+    VSIX_STAMP=$(stat -c %Y "$VSIX" 2>/dev/null || echo 0)
+    if [ "$MK_VER" = "$VER" ] && [ "$MK_COUNT" = "$CUR_COUNT" ] && [ "$MK_STAMP" = "$VSIX_STAMP" ]; then
+        step "检测到 $VER 已完整安装($CUR_COUNT 文件, 与 vsix 同版本), 跳过构建与复制"
         register_extension
         echo
         echo "✅ 已是最新: cl.eide-$VER ($CUR_COUNT 文件) —— 请在 VSCode 执行 Reload Window"
@@ -222,8 +227,9 @@ step "    完整性 OK ($DST_COUNT 文件)"
 register_extension
 step "5/5 完成"
 
-# 记录本次成功的版本与文件数, 供下次"幂等快路径"直接判定
-echo "$VER $DST_COUNT" > "$MARKER"
+# 记录本次成功的版本、文件数与 vsix 时间戳, 供下次"幂等快路径"直接判定
+# (时间戳不可省: 同版本重打包时文件数不变, 少了它会误判为"已是最新")
+echo "$VER $DST_COUNT $(stat -c %Y "$VSIX" 2>/dev/null || echo 0)" > "$MARKER"
 
 echo
 echo "✅ 安装完成: cl.eide-$VER ($DST_COUNT 文件)"

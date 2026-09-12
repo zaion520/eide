@@ -9,6 +9,7 @@ All notable version changes will be recorded in this file.
 ### [unreleased] revision
 
 **New**:
+  - `clangd`: **修复"根外源码拿不到编译数据库"——项目级 `.clangd` 位置改为覆盖全部源码的公共祖先**(实测项目 `DSP\PROJ_M\code\MDK`:项目根只是 MDK 构建目录,303 条 CDB 条目 **100% 在根之外**;clangd 只沿文件自身的祖先目录链查找 `.clangd`,放在项目根的配置对这些根外源码**完全不可见**,编译数据库从未加载,`clangd --check` 实测 21 个错误)。现按 CDB 条目的实际路径计算:若存在根外源码,把 `.clangd` 上移到能覆盖全部条目的公共祖先(相对 CDB 路径同步调整),`clangd --check` 实测 **21 → 0 错误**;上移位置须仍覆盖项目根、且其下无其他 EIDE 项目根(否则保守回退并告警),避免抢走别的项目配置
   - `clangd`: **修复"某项目红色波浪线骤增"——用户级 config.yaml 里祖先级通配 PathMatch 片段截胡兄弟项目的编译数据库**(实测:项目 `DSP\PROJ_D` 被旧块里的 `^[dD]:/projects/.*$` 命中,clangd 拿 PROJ_C 的 AC5 命令去解析 AC6 源码,`core_inc.h file not found` / `unknown type name` 满屏);定位手段为 `clangd --check` 直读服务端判定,根因是旧格式受管块会为"项目根 + 根外源码目录"各渲染一个 `If.PathMatch` 片段,其中根外片段可能是**祖级通配**。现新增 `pruneForeignPathMatchFragments`:以块的 token(项目根 base64)为锚,回收"路径是项目根严格祖先"的越界片段(对自身冗余、对兄弟项目是截胡),合法根外目录片段(兄弟/子目录)不受影响;带兜底保证绝不把块削到失去自身根覆盖,畸形块原样保留
   - `Target`: **v4.2 → v4.1 降级导出**(命令 `_cl.eide.project.exportAsV41`,右键项目节点 + 命令面板)——把 v4.2 布局合并回官方版可读的单文件工程:产出 `.eide/eide.4.1.yml`(键序与官方版一致)并把旁路文件还原到 `.eide/` 根(`<target>.libs.yml`、`<target>.st.option.bytes.ini`、按目标名为键的 `files.options.yml`);**不改动**当前 v4.2 工程,导出为附加产物,用于与官方版用户交换项目或回馈上游(单位测试覆盖"导出→再迁移回 v4.2"的无损往返)
   - `Project`: **重定位根目录时重写内嵌绝对路径**——`.code-workspace` 内嵌 settings 与 `.vscode/settings.json` 中的绝对路径(如 clangd `--query-driver=<abs>`、`compilerPath` 一类)不随目录搬迁自动更新,此前重定位后需要手工修;现按 jsonc AST 精确改写字符串字面量(注释/缩进/键序原样保留,只匹配路径边界避免 `root` 误伤 `root2`,沿用原值分隔符风格),损坏的 JSONC 一律不碰
