@@ -8,6 +8,9 @@ All notable version changes will be recorded in this file.
 
 ### [unreleased] revision
 
+**Fixed**:
+  - `clangd`: **修复"clangd 语言服务起不来,所有请求报错"**——激活/刷新链在极短时间内连排两轮刷新(项目加载链 + provider 注册链各一次),每轮都执行 `clangd.restart`;vscode-clangd 扩展(0.6.0)在快速连续 restart 时存在命令注册竞态:旧 language client 的 `clangd.applyFix` 等服务端命令尚未注销,新 client 再注册同名命令即抛 `command already exists`,client 创建失败,之后 documentSymbol/hover/inlayHint 等全部报错(实测 clangd 22.1.6)。双修复:① `tryRestartClangd` 加 500ms 尾缘防抖 + in-flight 互斥,短时间多轮 `changed=true` 只真正 restart 一次;② 移除激活链 `registerClangdProvider` 的冗余 `forceUpdateCpptoolsConfig`(项目加载链 AfterLoad 已请求过刷新,重复请求正是连排两轮的来源)。判断依据:eide-log 同一秒两条 update done + 两条 restart,与 clangd 服务端日志三次 Starting LSP 逐一对齐
+
 **New**:
   - `Architecture`: **通用性约束落地(详见 AGENTS.md "〇、架构约束")**——src 与 scripts 不得写死机器路径/盘符/真实工程名;目录与文件名常量收敛到 `ProjectConsts`(`EIDE_DIR`/`PROJECT_CONFIG_FILE_NAME`/`LEGACY_PROJECT_CONFIG_FILE_NAME`/`EIDE_HOME_DIR_NAME`)与 `clangdSupport`(`PROJECT_CDB_DIR_NAME`/`CDB_FILE_NAME`),`.eide`/`eide.yml` 等字面量从 8 处重复定义收敛为单一来源;`install-vsix.sh` 改为自定位(BASH_SOURCE 推导仓库、`EIDE_REPO`/`EIDE_EXT_DIR`/`EIDE_BSDTAR`/`EIDE_INSTALL_WORK` 环境变量覆盖、扩展身份与产物名从 package.json 动态读取、注册路径现场推导);测试夹具去除盘符假设与真实工程名,统一用临时目录/虚拟路径
   - `clangd`: **修复"根外源码拿不到编译数据库"——项目级 `.clangd` 位置改为覆盖全部源码的公共祖先**(实测项目 `DSP\PROJ_M\code\MDK`:项目根只是 MDK 构建目录,303 条 CDB 条目 **100% 在根之外**;clangd 只沿文件自身的祖先目录链查找 `.clangd`,放在项目根的配置对这些根外源码**完全不可见**,编译数据库从未加载,`clangd --check` 实测 21 个错误)。现按 CDB 条目的实际路径计算:若存在根外源码,把 `.clangd` 上移到能覆盖全部条目的公共祖先(相对 CDB 路径同步调整),`clangd --check` 实测 **21 → 0 错误**;上移位置须仍覆盖项目根、且其下无其他 EIDE 项目根(否则保守回退并告警),避免抢走别的项目配置

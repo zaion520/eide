@@ -443,7 +443,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             this.cppToolsApi.registerCustomConfigurationProvider(this);
             this.cppToolsOut.appendLine(`[init] register CustomConfigurationProvider done !\r\n`);
 
-            // update cppConfig now
+            // update cppConfig now(项目加载链已请求过一轮刷新,这里只为 cpptools 首次注册补一次通知)
             prj.forceUpdateCpptoolsConfig();
 
             // set flag
@@ -585,12 +585,13 @@ export class ProjectExplorer implements CustomConfigurationProvider {
     private async registerClangdProvider(prj: AbstractProject) {
 
         // clangd 与 cpptools 不再互斥:clangd 集成管线读写的是
-        // <root>/compile_commands.json(根目录单文件库) + 用户级 config.yaml + clangd.arguments,
+        // <root>/clangd/compile_commands.json(CDB 收拢目录) + 用户级 config.yaml + clangd.arguments,
         // 与 cpptools 的 CustomConfigurationProvider 互不干扰。
-        // clangd 集成管线始终开启,更新由 UpdateCppConfig 主链的 doUpdateClangdSupport 统一触发
-        // (cppConfigChanged 监听器路径已移除:它会在 doUpdateCpptoolsConfig 阶段提前跑一遍,
-        //  此时 builder.params 尚未刷新,读到旧参数,且与主链重复执行、EISDIR 噪音翻倍)。
-        prj.forceUpdateCpptoolsConfig();
+        // clangd 集成管线始终开启,更新由 UpdateCppConfig 主链的 doUpdateClangdSupport 统一触发。
+        // **这里不再额外 forceUpdateCpptoolsConfig**:项目加载(AfterLoad)已请求过一轮刷新,
+        // 此前的重复请求会在激活瞬间连排两轮刷新链 → 连续两次 clangd.restart →
+        // vscode-clangd 扩展的命令注册竞态(command 'clangd.applyFix' already exists),
+        // 整个 language client 起不来,之后所有 LSP 请求报错(clangd 0.6.0 实测)。
     }
 
     // -----------------------------------------

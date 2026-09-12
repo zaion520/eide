@@ -778,19 +778,52 @@ function migrateLegacyClangdConfig(prj: AbstractProject): boolean {
 // master entry
 // ---------------------------------------------------------------------------
 
-/** 在配置变更后尝试唤醒 clangd(优先温和的重载命令) */
+/**
+ * 在配置变更后尝试唤醒 clangd(优先温和的重载命令)。
+ *
+ * **必须防抖**:一轮刷新管线可能由多个事件源接连触发(激活链、文件监听、命令),
+ * 每轮 `changed=true` 都会调到这里;vscode-clangd 扩展在快速连续 restart 时有
+ * 注册竞态(旧 client 的 `clangd.applyFix` 等服务端命令尚未注销,新 client 的
+ * ExecuteCommandFeature 再注册同名命令即抛 `command 'clangd.applyFix' already exists`,
+ * 整个 client 起不来,之后所有请求报错)——实测 clangd 0.6.0 + clangd 22.1.6。
+ * 因此这里做尾缘合并:短时间内多次调用只真正执行一次 restart。
+ */
+const RESTART_DEBOUNCE_MS = 500;
+let restartTimer: NodeJS.Timeout | undefined;
+let restartInFlight = false;
+
 export async function tryRestartClangd(): Promise<boolean> {
-    const commands = ['clangd.restart', 'clangd.reload', 'clangd.restartLanguageServer'];
-    for (const command of commands) {
-        try {
-            await vscode.commands.executeCommand(command);
-            GlobalEvent.log_info(`clangd refresh command executed: ${command}`);
-            return true;
-        } catch (error) {
-            GlobalEvent.log_info(`clangd refresh command unavailable: ${command} (${String(error)})`);
-        }
+    return new Promise<boolean>((resolve) => {
+        if (restartTimer) { clearTimeout(restartTimer); }
+        restartTimer = setTimeout(() => {
+            restartTimer = undefined;
+            void doRestartClangd().then(resolve);
+        }, RESTART_DEBOUNCE_MS);
+    });
+}
+
+async function doRestartClangd(): Promise<boolean> {
+    if (restartInFlight) {
+        // 上一轮 restart 还没结束:跳过(刚起的 client 不需要再重启),
+        // 调用方的意图已由防抖窗口合并保证
+        return false;
     }
-    return false;
+    restartInFlight = true;
+    try {
+        const commands = ['clangd.restart', 'clangd.reload', 'clangd.restartLanguageServer'];
+        for (const command of commands) {
+            try {
+                await vscode.commands.executeCommand(command);
+                GlobalEvent.log_info(`clangd refresh command executed: ${command}`);
+                return true;
+            } catch (error) {
+                GlobalEvent.log_info(`clangd refresh command unavailable: ${command} (${String(error)})`);
+            }
+        }
+        return false;
+    } finally {
+        restartInFlight = false;
+    }
 }
 
 export interface RebuildClangdCacheResult {
@@ -828,7 +861,7 @@ export function rebuildClangdCache(prj: AbstractProject): RebuildClangdCacheResu
     removeOwnManagedBlocksFromUserConfig(prj);
     updateClangdWorkspaceSettings(prj);
     updateClangdWorkspaceFileExclude(prj);
-    void tryRestartClangd();
+    tryRestartClangd();
 
     return { targetName, entries: Math.max(entries, 0), cacheCleared };
 }
