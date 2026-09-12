@@ -1177,6 +1177,26 @@ export function isManagedBlockStale(
 }
 
 /**
+ * 块内是否存在落在 `currentRoot` 子树内的 PathMatch 片段。
+ * 用于识别"项目根重定位前"的旧块:旧根(如 KEIL/Keil_project)是
+ * 新根(其上级)的子目录,旧块写的 PathMatch 必然落在新根之内。
+ */
+export function hasFragmentInsideRoot(block: string, currentRoot: string): boolean {
+    const normalize = (p: string): string => toPosix(path.normalize(String(p || ''))).replace(/\/+$/, '').toLowerCase();
+    const root = normalize(currentRoot);
+    if (!root) { return false; }
+    const pmRe = /PathMatch:\s*"([^"]+)"/g;
+    let pm: RegExpExecArray | null;
+    while ((pm = pmRe.exec(String(block || ''))) !== null) {
+        const fragPath = pathFromPathMatch(pm[1]);
+        if (!fragPath) { continue; }
+        const f = normalize(fragPath);
+        if (f === root || f.startsWith(`${root}/`)) { return true; }
+    }
+    return false;
+}
+
+/**
  * 治理受管块内**越界的 PathMatch 片段**。
  *
  * 背景(实测根因):受管块可含多个 `If: PathMatch` 片段(历史版本为
@@ -1203,11 +1223,29 @@ export function pruneForeignPathMatchFragments(
 
     const text = String(block || '');
 
+    // **先把 BEGIN/END 标记行摘出来**,只对块体做片段切分。
+    // 若不摘,END 标记行会粘在最后一个片段上 —— 删该片段时把 END 一并删掉,
+    // 留下一个"有 BEGIN 无 END"的残块(实测:正是 config.yaml 里截断块的成因,
+    // 残块内的片段继续被 clangd 匹配,把文件指向旧库)。
+    const beginRe = /^# BEGIN EIDE Clangd (?:Support|Sync)\s*(\S*)[ \t]*$/;
+    const endRe = /^# END EIDE Clangd (?:Support|Sync)\s*(\S*)[ \t]*$/;
+    const lines = text.split('\n');
+    let beginLine = '';
+    let endLine = '';
+    const bodyLines: string[] = [];
+    for (const line of lines) {
+        const t = line.trim();
+        if (!beginLine && beginRe.test(t)) { beginLine = line; continue; }
+        if (!endLine && endRe.test(t)) { endLine = line; continue; }
+        bodyLines.push(line);
+    }
+    const body = bodyLines.join('\n');
+
     // 从标记行取 token 并还原 ownerRoot(调用方未提供时)
     let owner = ownerRoot;
     if (!owner) {
-        const tokenMatch = text.match(/# BEGIN EIDE Clangd (?:Support|Sync)\s*(\S+)/);
-        if (tokenMatch) {
+        const tokenMatch = body.length >= 0 ? (beginLine.trim().match(beginRe)) : undefined;
+        if (tokenMatch && tokenMatch[1]) {
             try {
                 const decoded = Buffer.from(tokenMatch[1], 'base64').toString('utf8');
                 if (decoded && /[\\/]/.test(decoded)) { owner = decoded; }
@@ -1216,7 +1254,7 @@ export function pruneForeignPathMatchFragments(
     }
 
     // 切成 "---" 分隔的片段(保留分隔符,便于原样重组)
-    const parts = text.split(/(?=^---\s*$)/m);
+    const parts = body.split(/(?=^---\s*$)/m);
 
     type Frag = { text: string; root?: string };
     const frags: Frag[] = parts.map((part) => {
@@ -1258,7 +1296,8 @@ export function pruneForeignPathMatchFragments(
         if (!covered) { return { block: text, removedFragments: 0 }; }
     }
 
-    return { block: kept.join(''), removedFragments };
+    const keptBody = kept.join('');
+    return { block: [beginLine, keptBody, endLine].filter((l) => l !== '').join('\n'), removedFragments };
 }
 
 /**
@@ -1281,6 +1320,8 @@ export function pruneStaleManagedBlocks(
         dbExists: (p: string) => boolean;
         /** 是否回收遗留标记族(默认 true;仅测试/诊断场景需要关掉) */
         removeLegacy?: boolean;
+        /** 当前打开的项目根:其子树内的受管块一律视为本项目旧根残留,整块回收 */
+        currentRoot?: string;
     }
 ): { content: string; removed: number; removedLegacy: number; removedFragments: number } {
 
@@ -1288,6 +1329,42 @@ export function pruneStaleManagedBlocks(
     let removed = 0;
     let removedLegacy = 0;
     let removedFragments = 0;
+
+    // ---- 0) 未配对 BEGIN(有 BEGIN 无 END,常见于并发写入被截断) ----
+    // 成对块的正则要求 BEGIN..END 配对,截断块对它完全不可见 → 永不回收,
+    // 其片段仍会被 clangd 当作合法配置参与匹配(实测:片段把文件指向旧库,
+    // 与项目级 .clangd 打架)。处理:从 BEGIN 行起,删到下一个块标记(任何
+    // BEGIN/END 行)或文件结尾 —— 无论哪种截断形态,残块整体移除。
+    {
+        const lines = out.split('\n');
+        const isMarker = (l: string) => /^# (?:BEGIN|END) EIDE Clangd (?:Support|Sync)/.test(l.trim());
+        const orphanIdx: number[] = [];
+        for (let i = 0; i < lines.length; i++) {
+            if (/^# BEGIN EIDE Clangd (?:Support|Sync)/.test(lines[i].trim())) {
+                // 向后找同名 token 的 END;找不到 = 未配对
+                // 标记行形态 '# BEGIN EIDE Clangd Support <token>',token 取行尾字段
+                const fields = lines[i].trim().split(/\s+/);
+                const tok = fields[fields.length - 1] || '';
+                let closed = false;
+                for (let j = i + 1; j < lines.length; j++) {
+                    if (new RegExp(`^# END EIDE Clangd (?:Support|Sync) ${escapeRegex(tok)}\\s*$`).test(lines[j].trim())) { closed = true; break; }
+                }
+                if (!closed) { orphanIdx.push(i); }
+            }
+        }
+        if (orphanIdx.length > 0) {
+            const kill = new Set<number>();
+            for (const start of orphanIdx) {
+                for (let i = start; i < lines.length; i++) {
+                    if (i > start && isMarker(lines[i])) { break; }   // 下一个块标记处停止
+                    kill.add(i);
+                }
+            }
+            const keptLines = lines.filter((_, i) => !kill.has(i));
+            out = keptLines.join('\n');
+            removed += orphanIdx.length;
+        }
+    }
 
     // ---- 1) 当前标记族: 按失效判定回收 + 剔除越界片段 ----
     const currentRe = new RegExp(
@@ -1298,6 +1375,13 @@ export function pruneStaleManagedBlocks(
         if (isManagedBlockStale(block, opts.pathExists, opts.dbExists)) {
             removed++;
             return '';
+        }
+        // 重定位残留:块内任一片段路径落在当前项目根**之内**,
+        // 说明该块写于"项目根还在更深处"的年代(如根在 KEIL/Keil_project,
+        // 后重定位到上级行)。它的 CDB 指向旧布局,与项目级 .clangd 打架。
+        if (opts.currentRoot) {
+            const inside = hasFragmentInsideRoot(block, opts.currentRoot);
+            if (inside) { removed++; return ''; }
         }
         const pruned = pruneForeignPathMatchFragments(block);
         if (pruned.removedFragments > 0) {

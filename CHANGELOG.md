@@ -9,6 +9,7 @@ All notable version changes will be recorded in this file.
 ### [unreleased] revision
 
 **Fixed**:
+  - `clangd`: **修复 PROJ_C/app 满屏波浪线——用户级 config.yaml 残留旧受管块劫持**。该工程项目根曾重定位(KEIL/Keil_project → 上级),重定位前写入的用户级块仍在:①一个**无 END 标记的截断块**(并发写入被截断,成对正则对它不可见而永不回收),其 PathMatch 把 app/ 文件指向不存在的旧库;②旧根 KEIL/Keil_project 的块(根和库都还在,失效规则抓不到),PathMatch 命中当前项目全部源文件、CDB 指向重定位前的旧布局。clangd 配置优先级 = 用户级块后加载覆盖项目级 .clangd,于是 `Failed to find compilation database` → 降级 x86 默认命令 → 满屏波浪线(`clangd --check` 实测 3 错误,隐藏用户级 config.yaml 后 0 错误,决定性 A/B)。管线三处增强:`pruneStaleManagedBlocks` 现回收**未配对 BEGIN 截断块**(删到下一块标记/EOF);新增 `currentRoot` 参数——块内任一片段落在当前项目根子树内即视为重定位旧根残留、整块回收;顺带修掉 `pruneForeignPathMatchFragments` 吃掉 END 标记的陈年缺陷(删最后一个片段时把 END 一并带走,正是产生截断块的源头)。回归测试 3 条(207/207 绿);PROJ_C 实测 app/Firmware 均 0 编译错误
   - `clangd`: **修复"clangd 语言服务起不来,所有请求报错"**——激活/刷新链在极短时间内连排两轮刷新(项目加载链 + provider 注册链各一次),每轮都执行 `clangd.restart`;vscode-clangd 扩展(0.6.0)在快速连续 restart 时存在命令注册竞态:旧 language client 的 `clangd.applyFix` 等服务端命令尚未注销,新 client 再注册同名命令即抛 `command already exists`,client 创建失败,之后 documentSymbol/hover/inlayHint 等全部报错(实测 clangd 22.1.6)。双修复:① `tryRestartClangd` 加 500ms 尾缘防抖 + in-flight 互斥,短时间多轮 `changed=true` 只真正 restart 一次;② 移除激活链 `registerClangdProvider` 的冗余 `forceUpdateCpptoolsConfig`(项目加载链 AfterLoad 已请求过刷新,重复请求正是连排两轮的来源)。判断依据:eide-log 同一秒两条 update done + 两条 restart,与 clangd 服务端日志三次 Starting LSP 逐一对齐
 
 **New**:

@@ -616,7 +616,12 @@ function removeOwnManagedBlocksFromUserConfig(prj: AbstractProject): boolean {
 
     const pathExists = (p: string) => { try { return !!p && fs.existsSync(p); } catch { return false; } };
     const sanitized = sanitizeClangdUserConfig(existingContent);
-    const pruned = pruneStaleManagedBlocks(sanitized.content, { pathExists, dbExists: pathExists });
+    const pruned = pruneStaleManagedBlocks(sanitized.content, {
+        pathExists,
+        dbExists: pathExists,
+        // 本项目子树内的旧块 = 项目根重定位前的残留(旧根是新根的子目录),一并回收
+        currentRoot: prj.getProjectRoot().path
+    });
     const removed = removeManagedBlocksAllFamilies(pruned.content, token);
     const nextContent = removed.content;
 
