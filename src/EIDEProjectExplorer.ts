@@ -1289,8 +1289,8 @@ export class ProjectExplorer implements CustomConfigurationProvider {
     }
 
     /**
-     * 重建 clangd 缓存(维修通道):删根目录编译数据库 + 索引残留,
-     * 走重生全链路并唤醒 clangd。日常增删文件走自动管线,不需要它。
+     * 重新生成 clangd 配置(维修通道):产出 compile_commands.json + 项目级 `.clangd`,
+     * 清旧库与残留后走重生全链路并唤醒 clangd。日常增删文件走自动管线,不需要它。
      */
     public async onRebuildClangdCache(prjItem?: ProjTreeItem) {
 
@@ -1303,9 +1303,9 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         try {
             const result = rebuildClangdCache(prj);
             GlobalEvent.show_msgbox('Info',
-                vscode.l10n.t("Clangd cache rebuilt for target '{0}': {1} files{2} !",
+                vscode.l10n.t("Clangd config regenerated for target '{0}': compile_commands.json ({1} entries) + .clangd{2} !",
                     result.targetName, result.entries,
-                    result.cacheCleared ? '' : vscode.l10n.t(' (nothing cached)')));
+                    result.cacheCleared ? '' : vscode.l10n.t(' (stale cache cleared)')));
         } catch (error) {
             this.showTargetOperationError(error);
         }

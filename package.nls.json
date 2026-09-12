@@ -29,7 +29,7 @@
     "eide.target.rename": "Rename Target",
     "eide.target.duplicate": "Duplicate Target",
     "eide.target.delete": "Delete Target",
-    "eide.project.clangd.rebuildCache": "Generate compile_commands",
+    "eide.project.clangd.rebuildCache": "Generate Clangd Config",
     "eide.project.buildAllTargets": "Build All Targets",
     "eide.project.build": "Build",
     "eide.project.buildAndFlash": "Build And Flash",

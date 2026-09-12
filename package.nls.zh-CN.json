@@ -29,7 +29,7 @@
     "eide.target.rename": "重命名目标",
     "eide.target.duplicate": "克隆目标",
     "eide.target.delete": "删除目标",
-    "eide.project.clangd.rebuildCache": "生成 compile_commands",
+    "eide.project.clangd.rebuildCache": "生成 clangd 配置",
     "eide.project.buildAllTargets": "构建所有目标",
     "eide.project.build": "构建",
     "eide.project.buildAndFlash": "构建，烧录",

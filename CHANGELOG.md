@@ -33,7 +33,7 @@ All notable version changes will be recorded in this file.
 **Changes**:
   - `Builder`: 编译数据库生成(`--only-dump-compilerdb`,每次 UpdateCppConfig/切 target 触发)切换至 Go 版 unify_builder(单文件原生程序,零 .NET 运行时依赖;与 C# 原版在真实项目 AC6/GCC 上逐字节对拍验收);完整构建管线迁移进行中,C# 版仍负责实际编译(已在 3.27.33 完成切换)
   - `UI`: 项目右键菜单重排——构建/烧录/目标/生成/查看五组分列(构建所有目标归构建组、启动调试移入烧录组、生成类命令聚拢为 6_group:builder.params → 调试配置模板 → compile_commands → lib 生成器 → 重定位根目录,查看类归 7_group);"导出为..."子菜单补 viewItem 限制(此前任意节点都会出现);芯片包节点 CMSIS 三项分组排序并汉化;"包含所有源文件"与"排除所有源文件"拆分排序;"设置编译器"补分组
-  - `UI`: 右键菜单"重建 Clangd 缓存"更名为"生成 compile_commands"(命令 ID `_cl.eide.project.clangd.rebuildCache` 不变)
+  - `UI`: 右键菜单"重建 Clangd 缓存"更名为"生成 compile_commands"(命令 ID `_cl.eide.project.clangd.rebuildCache` 不变);3.27.57 再更名为"**生成 clangd 配置**"——命令实际产出 compile_commands.json 与项目级 `.clangd` 两件套,菜单名对齐实际行为,完成提示同步列出两个产物
   - `Cppcheck`: 移除静态检测功能(命令、右键"静态检查"子菜单、`EIDE.Cppcheck.ExecutablePath` 设置与工具安装项一并删除)
   - `Debug`: pyOCD 调试配置(运行时与右键"生成调试配置模板"两条路径)统一新增 `overrideGDBServerStartedRegex: "port"` 与 `executable`(后缀跟随工具链:Keil 为 .axf;AC5/AC6 模板不再丢弃 executable);probe-rs 的 `programBinary` 默认文件改为跟随工具链产物(Keil 为 .axf,不再硬编码 .elf)
   - `Project Loading`: 屏蔽项目文件版本检测——eide.yml 版本比扩展新时不再拒绝加载,仅记录警告(eide-log)后继续

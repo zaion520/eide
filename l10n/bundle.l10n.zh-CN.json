@@ -6,6 +6,6 @@
     "Yes": "确定",
     "No": "取消",
     "{0} target(s) deleted.": "{0} 个目标已删除。",
-    "Clangd cache rebuilt for target '{0}': {1} files{2} !": "Clangd 缓存已按 target '{0}' 重建: {1} 个条目{2} !",
-    " (nothing cached)": "(无缓存清理)"
+    "Clangd config regenerated for target '{0}': compile_commands.json ({1} entries) + .clangd{2} !": "已按 target '{0}' 重新生成 clangd 配置: compile_commands.json ({1} 个条目) + .clangd{2} !",
+    " (stale cache cleared)": "(已清理旧缓存)"
 }

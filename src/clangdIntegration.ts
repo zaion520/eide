@@ -800,8 +800,11 @@ export interface RebuildClangdCacheResult {
 }
 
 /**
- * 重建 clangd 缓存(维修通道):删 `<root>/.clangd/` 整目录(库 + 后台索引 `.cache` 一锅端)
- * + 旧布局残留(根目录库/`.cache`/`.eide-clangd/`)→ 走重生全链路 → 唤醒 clangd。
+ * 重新生成 clangd 配置(维修通道,右键菜单"生成 clangd 配置"):
+ * 产出两件套 —— `<root>/clangd/compile_commands.json`(编译数据库)与
+ * 项目级 `.clangd` 配置文件(位置由 resolveClangdProjectConfigDirFor 按源码覆盖范围推导)。
+ * 先清空:删 `<root>/clangd/` 整目录(库 + 后台索引 `.cache` 一锅端)+ 旧布局残留
+ * (根目录库/`.cache`/`.eide-clangd/`)→ 走重生全链路 → 唤醒 clangd。
  * 日常增删文件走自动管线,不需要它;库损坏/换代残留时用它一键恢复(幂等,可重跑)。
  */
 export function rebuildClangdCache(prj: AbstractProject): RebuildClangdCacheResult {
