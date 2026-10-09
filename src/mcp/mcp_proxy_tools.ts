@@ -36,24 +36,38 @@ export function createMcpServer(delegateToolCall: ToolDelegate): McpServer {
     const server = new McpServer(
         {
             name: 'eide mcp server',
-            version: '1.2.0',
+            version: '1.3.0',
             icons: [{ src: './mcp.svg', sizes: ['512x512'], mimeType: 'image/svg+xml' }],
             websiteUrl: 'https://github.com/modelcontextprotocol/typescript-sdk'
         },
         {
+            instructions: 'Embedded IDE (EIDE) project tools. Workflow: call "eide_list_projects" first to get project uids, then pass a uid to the tool you want. If exactly one project is open, the uid parameter may be omitted (the active project is used).',
             capabilities: { logging: {}, tasks: { requests: { tools: { call: {} } } } },
             taskStore,
             taskMessageQueue: new InMemoryTaskMessageQueue()
         }
     );
 
-    const uidSchema = z.string().describe('Project UID (cannot be empty). You can get it from "<Your workspace>/.eide/eide.yml", property name is "miscInfo.uid"');
+    const uidSchema = z.string().optional().describe(
+        'Project UID. Optional: omit it when exactly one project is open (the active project is used). ' +
+        'For multiple projects, list uids with tool "eide_list_projects" first.'
+    );
+
+    server.registerTool(
+        'eide_list_projects',
+        {
+            title: 'List Projects',
+            description: 'List all opened EIDE projects in this VS Code window: uid, project name and root directory. Call this first to get the uid required by other tools.',
+            inputSchema: {}
+        },
+        async (args) => delegateToolCall('eide_list_projects', args)
+    );
 
     server.registerTool(
         'eide_build',
         {
             title: 'Build Project',
-            description: 'Build your eide project.',
+            description: 'Build the project incrementally (only compile changed files). Faster than "eide_rebuild".',
             inputSchema: { uid: uidSchema }
         },
         async (args) => delegateToolCall('eide_build', args)
@@ -63,7 +77,7 @@ export function createMcpServer(delegateToolCall: ToolDelegate): McpServer {
         'eide_rebuild',
         {
             title: 'Rebuild Project',
-            description: 'Rebuild your eide project.',
+            description: 'Clean all build products first, then build everything from scratch. Much slower than "eide_build" — use it only when the incremental build is broken.',
             inputSchema: { uid: uidSchema }
         },
         async (args) => delegateToolCall('eide_rebuild', args)
@@ -73,7 +87,7 @@ export function createMcpServer(delegateToolCall: ToolDelegate): McpServer {
         'eide_clean',
         {
             title: 'Clean Project',
-            description: `Clean up the generated products in the "build" directory.`,
+            description: `Remove generated products in the "build" directory. Does not build.`,
             inputSchema: { uid: uidSchema }
         },
         async (args) => delegateToolCall('eide_clean', args)
@@ -83,10 +97,10 @@ export function createMcpServer(delegateToolCall: ToolDelegate): McpServer {
         'eide_flash',
         {
             title: 'Program Flash',
-            description: 'Perform flash memory programming on your MCU',
+            description: 'Program the built firmware into the MCU flash. Set eraseAll=true to erase the whole chip BEFORE programming (it still programs after erasing).',
             inputSchema: {
                 uid: uidSchema,
-                eraseAll: z.boolean().describe('Determine whether to perform a chip erase of the mcu.')
+                eraseAll: z.boolean().describe('Erase the whole chip before programming (programming still runs afterwards).')
             }
         },
         async (args) => delegateToolCall('eide_flash', args)
@@ -139,7 +153,7 @@ export function createMcpServer(delegateToolCall: ToolDelegate): McpServer {
         'eide_add_src_dir',
         {
             title: 'Add a source directory',
-            description: `Select a source directory from filesystem and add to project. Then eide will collect c/c++ source file from this directory.`,
+            description: 'Add an existing directory path to the project as a source root. EIDE will collect c/c++ source files from this directory.',
             inputSchema: {
                 uid: uidSchema,
                 path: z.string().describe('A filesystem path for this directory.')

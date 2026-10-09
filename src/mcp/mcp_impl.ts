@@ -36,7 +36,8 @@ function resolveProject(
     if (uid) {
         return explorer.getProjectByUid(uid);
     }
-    return undefined;
+    // uid 缺省 = 激活项目(与 MCP 工具描述一致:单项目工作区可省略 uid)
+    return explorer.getActiveProject();
 }
 
 function projectNotFound(uid: string | null | undefined): CallToolResult {
@@ -44,7 +45,9 @@ function projectNotFound(uid: string | null | undefined): CallToolResult {
         isError: true,
         content: [{
             type: 'text',
-            text: uid ? `Error. Not such project (uid=${uid}).` : `Error. Params 'uid' cannot be empty.`
+            text: uid
+                ? `Error. Not such project (uid=${uid}). Use tool 'eide_list_projects' to list available projects.`
+                : `Error. No active project in this window. Open a project first, or pass 'uid' explicitly (list uids with tool 'eide_list_projects').`
         }]
     };
 }
@@ -74,6 +77,19 @@ export async function executeTool(
     const uid = args.uid as string | null | undefined;
 
     switch (tool) {
+        case 'eide_list_projects': {
+            const projects: { uid: string; name: string; rootDir: string; actived: boolean }[] = [];
+            explorer.foreachProjects((prj) => {
+                projects.push({
+                    uid: prj.getUid(),
+                    name: prj.getProjectName(),
+                    rootDir: prj.getRootDir().path,
+                    actived: explorer.getActiveProject()?.getUid() === prj.getUid()
+                });
+                return undefined;
+            });
+            return makeJsonResult(projects);
+        }
         case 'eide_build':
         case 'eide_rebuild':
         case 'eide_clean': {
