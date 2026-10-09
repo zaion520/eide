@@ -174,7 +174,11 @@ class SourceRootList implements SourceProvider {
 
         // update all
         for (const info of this.srcFolderMaps.values()) {
+            const tFolder = Date.now();
             this.updateFolder(info);
+            const elapsed = Date.now() - tFolder;
+            if (elapsed > 100) // 只记录慢目录(>100ms),定位主线程阻塞源
+                GlobalEvent.log_info(`project load timing: scan source root '${info.fileWatcher.file.path}' +${elapsed}ms`);
         }
 
         if (!notEmitEvt) { this.emit('dataChanged', 'dataChanged'); }
@@ -1203,17 +1207,31 @@ export abstract class AbstractProject implements CustomConfigurationProvider, Pr
             throw new Error(view_str$prompt$project_is_opened_by_another.replace('{path}', wsFile.path));
         }
 
+        // project load timing: renderer 曾观测到 exthost 主线程在项目加载期被阻塞数秒
+        // (Extension host is unresponsive),需分段计时定位同步 IO 重活
+        const tLoad = Date.now();
+        const logLoadPhase = (name: string) => {
+            GlobalEvent.log_info(`project load timing: ${name} +${Date.now() - tLoad}ms`);
+        };
+
         try {
             await this.BeforeLoad(wsFile);
+            logLoadPhase('BeforeLoad');
             this.LoadConfigurations(wsFile);
+            logLoadPhase('LoadConfigurations');
             this.loadProjectDirectory();
+            logLoadPhase('loadProjectDirectory');
             this.initProjectConfig();
+            logLoadPhase('initProjectConfig');
             this.loadToolchain();
             this.loadUploader();
             this.initProjectComponents();
+            logLoadPhase('initComponents(toolchain/uploader/components)');
             this.RegisterEvent();
             this.LoadSourceRootFolders();
+            logLoadPhase('LoadSourceRootFolders');
             await this.AfterLoad();
+            logLoadPhase('AfterLoad');
         } catch (error) {
             if (this.lock_handle)
                 FileLock.unlock(this.lock_handle);
@@ -3115,7 +3133,11 @@ $(OUT_DIR):
         }
 
         // force flush toolchain dependence
+        const tDep = Date.now();
         this.dependenceManager.Refresh(true);
+        const depElapsed = Date.now() - tDep;
+        if (depElapsed > 100) // 只记录慢刷新(>100ms),定位主线程阻塞源
+            GlobalEvent.log_info(`project load timing: dependenceManager.Refresh +${depElapsed}ms`);
         this.emit('dataChanged', 'dependence');
 
         // update uid if project not have
@@ -3572,10 +3594,17 @@ class EIDEProject extends AbstractProject {
 
     private srcRefMap: Map<string, File[]> = new Map();
 
+    // 源引用扫描代际号:notifyUpdateSourceRefs 已全异步化(逐文件 await IO),
+    // 加载链与构建完成回调可能并发触发,旧一轮必须让位于新一轮
+    private __srcRefGen: number = 0;
+
     public async notifyUpdateSourceRefs(toolchain_: ToolchainName | undefined) {
+
+        const tStart = Date.now();
 
         /* clear old */
         this.srcRefMap.clear();
+        const gen = ++this.__srcRefGen;
 
         /* check source references is enabled ? */
         if (!SettingManager.GetInstance().isDisplaySourceRefs()) {
@@ -3627,18 +3656,35 @@ class EIDEProject extends AbstractProject {
         try {
             const refMap = JSON.parse(refListFile.Read());
             for (const srcpath in refMap) {
+                // 代际号:新一轮扫描已启动时,旧一轮立即中止(其结果即将被覆盖)
+                if (gen !== this.__srcRefGen) return;
                 const refFile = new File((<string>refMap[srcpath]).replace(/\.[^\\\/\.]+$/, '.d'));
                 if (generate_dep_file) await generate_dep_file(compiler_cmd_db, srcpath, refFile.path);
-                if (!refFile.IsFile()) continue;
-                const refs = this.parseRefFile(refFile, toolName).filter(p => p != srcpath);
+                // 异步读取(原为同步 readFileSync+statSync 循环,几百文件时阻塞 exthost 主线程数秒,
+                // 实测 PROJ_B app +8304ms;逐文件 await 让出事件循环,IO 落线程池)
+                let cont: string | undefined;
+                try {
+                    cont = (ResManager.getLocalCodePage() == '936')
+                        ? iconv.decode(await fs.promises.readFile(refFile.path), '936')
+                        : await fs.promises.readFile(refFile.path, 'utf8');
+                } catch (error) {
+                    continue; // .d file not existed, skip (原 IsFile() 语义)
+                }
+                const refs = this.parseRefLines(cont, toolName).filter(p => p != srcpath);
                 this.srcRefMap.set(srcpath, refs.map((path) => new File(path)));
             }
         } catch (error) {
             GlobalEvent.log_warn(error);
         }
 
+        if (gen !== this.__srcRefGen) return; // 已被新一轮取代,不触发刷新
+
         // notify update src view
         this.emit('dataChanged', 'files');
+
+        const elapsed = Date.now() - tStart;
+        if (elapsed > 100) // 只记录慢扫描(>100ms),观察异步化效果
+            GlobalEvent.log_info(`project load timing: source refs scan done +${elapsed}ms (${this.srcRefMap.size} files)`);
     }
 
     public getSourceRefs(file: File): File[] {
@@ -3698,15 +3744,17 @@ class EIDEProject extends AbstractProject {
     }
 
     private parseRefFile(dFile: File, toolchain: ToolchainName): string[] {
-
-        let cont: string | undefined;
-
+        let cont: string;
         if (ResManager.getLocalCodePage() == '936') { // win32 gbk
             cont = iconv.decode(fs.readFileSync(dFile.path), '936');
         } else {
             cont = fs.readFileSync(dFile.path, 'utf8');
         }
+        return this.parseRefLines(cont, toolchain);
+    }
 
+    /** 纯解析(无 IO):供同步(parseRefFile)与异步(notifyUpdateSourceRefs)两条路径共用 */
+    private parseRefLines(cont: string, toolchain: ToolchainName): string[] {
         const lines: string[] = cont
             .split(/\r\n|\n/)
             .filter((line) => line.trim() != '');
@@ -3915,10 +3963,19 @@ class EIDEProject extends AbstractProject {
 
     protected async AfterLoad(): Promise<void> {
 
+        const tAfter = Date.now();
+        const logAfterPhase = (name: string) => {
+            const elapsed = Date.now() - tAfter;
+            if (elapsed > 100) // 只记录慢段(>100ms),定位主线程阻塞源
+                GlobalEvent.log_info(`project load timing: AfterLoad.${name} +${elapsed}ms`);
+        };
+
         await super.AfterLoad();
+        logAfterPhase('base');
 
         // register cfg watcher
         this.onSrcExtraOptionsChanged('changed'); // notify cpptools update now
+        logAfterPhase('onSrcExtraOptionsChanged');
 
         // init settings for new project
         if (this.isNewProject) {
@@ -4134,7 +4191,11 @@ class EIDEProject extends AbstractProject {
         }
 
         /* update src refs */
+        const tRefs = Date.now();
         this.notifyUpdateSourceRefs(undefined);
+        const refsElapsed = Date.now() - tRefs;
+        if (refsElapsed > 100) // 只记录慢段(>100ms):对 ref.json 每个源文件 stat+读 .d+解析,是同步 IO 大户
+            GlobalEvent.log_info(`project load timing: AfterLoad.notifyUpdateSourceRefs +${refsElapsed}ms`);
 
         // !! we need deleted global c_cpp_properties.json !!
         {
@@ -4200,6 +4261,7 @@ class EIDEProject extends AbstractProject {
 
         // save now
         this.Save(false, 100);
+        logAfterPhase('tail');
 
         if (this.GetConfiguration().needReloadProject) {
             notifyReloadWindow(view_str$prompt$reloadForOldProject);
