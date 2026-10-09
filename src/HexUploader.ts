@@ -1223,11 +1223,13 @@ class ProbeRSUploader extends HexUploader<string[]> {
         const result: FlashProgramFile[] = [];
         const matcher = /(?<path>[^,]+)(?:,(?<addr>0x[a-f0-9]+))?/i;
 
-        // if 'bin' path is empty, use default program path 
+        // if 'bin' path is empty, use default program path
+        // (suffix follows the toolchain product: Keil -> '.axf', GCC -> '.elf', ...)
+        // use absolute path: cargo-flash resolves relative paths against '--work-dir'
+        // (the .code-workspace dir), which breaks in multi-project workspaces
         if (options.bin.trim() === '') {
-            const elfPath = ['.', this.project.getOutputDir(), this.project.getProjectName() + '.elf'].join(File.sep);
             return [
-                { path: elfPath }
+                { path: this.project.getExecutablePath() }
             ];
         }
 

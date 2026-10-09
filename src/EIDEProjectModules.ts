@@ -2855,7 +2855,11 @@ class ProbeRSUploadModel extends UploadConfigModel<ProbeRSFlashOptions> {
     getKeyValue(key: string): string {
         switch (key) {
             case 'bin':
-                return (<any>this.data)[key] || '${ExecutableName}.elf';
+                // keep in sync with the real default: ProbeRSUploader.parseProgramFiles
+                // uses getExecutablePath() (suffix follows the toolchain product)
+                if ((<any>this.data)[key])
+                    return (<any>this.data)[key];
+                return '${ExecutableName}' + (ToolchainManager.getInstance().getToolchainByName(this.api.toolchainName())?.elfSuffix ?? '');
             case 'speed':
                 return (<any>this.data)[key] > 0 ? `${(<any>this.data)[key]} KHz` : 'default';
             case 'allowEraseAll':
