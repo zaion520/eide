@@ -54,3 +54,6 @@ dotnet-runtime*.exe
 # go build artifacts in source dir
 unify_builder-go/*.exe
 eide-master-*.rar
+
+# local dev context (kept locally, not published)
+/AGENTS.md
