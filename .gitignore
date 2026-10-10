@@ -57,3 +57,7 @@ eide-master-*.rar
 
 # local dev context (kept locally, not published)
 /AGENTS.md
+
+# local-only (kept locally, not published)
+/test
+/docs
