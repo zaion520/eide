@@ -55,11 +55,12 @@ import { VirtualSource } from "./VirtualSource";
 import * as utility from "./utility";
 import * as platform from './Platform';
 import { decideTargetFileEvent } from './targetFileWatchPolicy';
+import { decideYamlFileSave } from './targetSavePolicy';
 import { atomicWriteFileSync } from './AtomicWrite';
 import { snapshotCurrentTarget, recoverTargetToRoot, applyTargetSnapshot } from "./TargetManager";
 import {
     isV42Skeleton, splitIntoSkeleton, assembleFromSkeleton, TargetFileData,
-    matchTargetConfigFile, loadTargetFromFile,
+    matchTargetConfigFile, loadTargetFromFile, getTargetConfigFilePath,
 } from "./ProjectStorageV42";
 import { CompileConfigModel, UploadConfigModel, SdccCompileConfigModel, GccCompileConfigModel, RiscvCompileConfigModel, AnyGccCompileConfigModel, MipsCompileConfigModel } from "./EIDEProjectModules";
 import type {
@@ -133,8 +134,12 @@ export abstract class Configuration<ConfigType = any, EventType = any> {
         } catch (error) {
             GlobalEvent.emit('error', <Error>error);
         }
-        // v4.2 目标目录监听(目录可能尚未创建,失败不影响主链路)
+        // v4.2 目标目录监听(确保目录存在, 避免 fs.watch 抛 ENOENT)
         try {
+            const targetsDir = NodePath.join(NodePath.dirname(this.cfgFile.path), TARGETS_DIR_NAME);
+            if (!fs.existsSync(targetsDir)) {
+                fs.mkdirSync(targetsDir, { recursive: true });
+            }
             this.targetsWatcher?.Watch();
         } catch (error) {
             GlobalEvent.log_error(error);
@@ -342,6 +347,55 @@ export class ProjectConfiguration<T extends BuilderConfigData>
      * 超过 `SELF_WRITE_GUARD_MS` 的标记一律视为过期。
      */
     private selfWrittenTargetFiles: Map<string, number> = new Map();
+    /** 记录每个目标在磁盘上的最近内容: targetName -> rawContent */
+    private targetDiskContentMap: Map<string, string> = new Map();
+    /** 记录骨架 eide.yml 在磁盘上的最近内容 */
+    private lastDiskSkeletonContent: string | undefined;
+
+    /**
+     * 将磁盘上的目标信息更新进内存状态。
+     *
+     * 无论来源于 watcher 事件还是 Save() 时的三方对比兜底, 均复用此逻辑:
+     * - 更新 targets 表条目
+     * - 若为当前激活 target, 同步更新平铺键并原位更新 toolchain/uploader/customDep
+     * - 登记 targetDiskContentMap 作为最新磁盘基准
+     */
+    private applyTargetDiskUpdate(targetName: string, info: ProjectTargetInfo, rawContent?: string): void {
+        const prjConfig = <any>this.config;
+        if (!prjConfig.targets) { return; }
+
+        prjConfig.targets[targetName] = info;
+
+        if (rawContent !== undefined) {
+            this.targetDiskContentMap.set(targetName, rawContent);
+        }
+
+        // 非激活目标: 数据只在 targets 表中
+        if (prjConfig.mode !== targetName) {
+            this.emit('dataChanged', { type: 'compiler' });
+            return;
+        }
+
+        // 激活目标: 数据同时平铺在根节点, 原位更新
+        if (this.toolchainConfigModel && this.uploadConfigModel) {
+            if (info.toolchain && info.toolchain !== prjConfig.toolchain) {
+                this.setToolchain(info.toolchain);
+            }
+            if (info.uploader && info.uploader !== prjConfig.uploader) {
+                prjConfig.uploader = info.uploader;
+                this.uploadConfigModel = UploadConfigModel.getInstance(info.uploader, this.project);
+            }
+            applyTargetSnapshot(prjConfig, info, {
+                toolchainConfigModel: this.toolchainConfigModel,
+                uploadConfigModel: this.uploadConfigModel,
+                customDep: this.CustomDep_getDependence(),
+                toAbsolutePath: (path) => this.toAbsolutePath(path)
+            });
+        }
+
+        this.emit('dataChanged', { type: 'compiler' });
+    }
+
     /**
      * 外部手改了 `targets/<name>/<name>.yml` -> 把磁盘内容读回内存。
      *
@@ -376,24 +430,10 @@ export class ProjectConfiguration<T extends BuilderConfigData>
                 return; // 骨架里没有这个目标(新建/删除中) -> 交给主文件链路
             }
 
-            // 非激活目标:直接替换表中条目即可
-            if (prjConfig.mode !== targetName) {
-                prjConfig.targets[targetName] = info;
-                return;
-            }
+            const targetFilePath = getTargetConfigFilePath(eideDir, targetName);
+            const rawContent = fs.existsSync(targetFilePath) ? fs.readFileSync(targetFilePath, 'utf8') : undefined;
 
-            // 激活目标:数据同时平铺在根节点,需整份恢复(工具链/烧录器配置模型按引用绑定,
-            // 由 applyTargetSnapshot 原位写入)
-            prjConfig.targets[targetName] = info;
-            applyTargetSnapshot(prjConfig, info, {
-                toolchainConfigModel: this.toolchainConfigModel,
-                uploadConfigModel: this.uploadConfigModel,
-                customDep: this.CustomDep_getDependence(),
-                toAbsolutePath: (path) => this.toAbsolutePath(path)
-            });
-
-            // 通知上层重建编译配置/源文件树
-            this.emit('dataChanged', { type: 'compiler' });
+            this.applyTargetDiskUpdate(targetName, info, rawContent);
         } catch (error) {
             GlobalEvent.log_error(error);
         }
@@ -443,6 +483,15 @@ export class ProjectConfiguration<T extends BuilderConfigData>
         } else {
             this.__fileChgEvtEmitDelayTimer = setTimeout((this_: ProjectConfiguration<any>) => {
                 this_.__fileChgEvtEmitDelayTimer = undefined;
+                try {
+                    if (this_.cfgFile.IsFile()) {
+                        const raw = this_.cfgFile.Read();
+                        this_.lastDiskSkeletonContent = raw;
+                        this_.loadConfig(raw);
+                    }
+                } catch (err) {
+                    GlobalEvent.log_error(err);
+                }
                 this_.emit('dataChanged', { type: 'projectFileChanged' });
             }, 600, this);
         }
@@ -1296,6 +1345,7 @@ export class ProjectConfiguration<T extends BuilderConfigData>
     //---
 
     protected parse<T extends BuilderConfigData>(str: string): ProjectConfigData<T> {
+        this.lastDiskSkeletonContent = str;
         const parsed = ProjectConfiguration.parseProjectFile(str);
 
         // v4.2 骨架:目标详情在 .eide/targets/<name>/<name>.yml,逐一读入组装
@@ -1311,7 +1361,9 @@ export class ProjectConfiguration<T extends BuilderConfigData>
                         `Restore it from a backup (e.g. 'eide.v4.1.bak.yml'), ` +
                         `or remove target '${name}' from the 'targets' list in 'eide.yml' manually.`);
                 }
-                targetFiles.push({ name, data: yaml.parse(fs.readFileSync(targetFile, 'utf8')) });
+                const rawContent = fs.readFileSync(targetFile, 'utf8');
+                this.targetDiskContentMap.set(name, rawContent);
+                targetFiles.push({ name, data: yaml.parse(rawContent) });
             }
             return <ProjectConfigData<T>><unknown>assembleFromSkeleton(parsed, targetFiles);
         }
@@ -1485,8 +1537,7 @@ export class ProjectConfiguration<T extends BuilderConfigData>
         usrCtx.target = this.config.mode; // save current target
         this.setProjectUsrCtx(usrCtx);
 
-        // v4.2:目标数据写入 .eide/targets/<name>/<name>.yml(仅变化时写),
-        // 并清理索引中已不存在目标的残留目录;骨架 eide.yml 由 super.Save 写出
+        // v4.2: 目标数据写入 .eide/targets/<name>/<name>.yml
         if (this.config.version === EIDE_CONF_VERSION) {
             try {
                 const eideDir = NodePath.dirname(this.cfgFile.path);
@@ -1495,12 +1546,36 @@ export class ProjectConfiguration<T extends BuilderConfigData>
 
                 for (const item of targetFiles) {
                     const targetFile = NodePath.join(eideDir, 'targets', item.name, `${item.name}.yml`);
-                    const content = yaml.stringify(item.data, { indent: 2, lineWidth: 1000 });
-                    if (!fs.existsSync(targetFile) || fs.readFileSync(targetFile, 'utf8') !== content) {
-                        fs.mkdirSync(NodePath.dirname(targetFile), { recursive: true });
-                        // 登记自写路径, 让 targets watcher 跳过本次事件
-                        this.selfWrittenTargetFiles.set(targetFile.toLowerCase(), Date.now());
-                        atomicWriteFileSync(targetFile, content);
+                    const currentDiskContent = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, 'utf8') : undefined;
+                    const lastDiskContent = this.targetDiskContentMap.get(item.name);
+                    const memoryContent = yaml.stringify(item.data, { indent: 2, lineWidth: 1000 });
+
+                    const decision = decideYamlFileSave({
+                        memoryContent,
+                        lastDiskContent,
+                        currentDiskContent
+                    });
+
+                    switch (decision) {
+                        case 'reload-from-disk': {
+                            // 磁盘被外部手改! 绝不覆盖, 反向重载进内存
+                            const reloaded = loadTargetFromFile(eideDir, item.name);
+                            if (reloaded) {
+                                this.applyTargetDiskUpdate(item.name, reloaded, currentDiskContent);
+                            }
+                            break;
+                        }
+                        case 'write-memory-to-disk': {
+                            fs.mkdirSync(NodePath.dirname(targetFile), { recursive: true });
+                            // 登记自写路径, 让 targets watcher 跳过本次事件
+                            this.selfWrittenTargetFiles.set(targetFile.toLowerCase(), Date.now());
+                            atomicWriteFileSync(targetFile, memoryContent);
+                            this.targetDiskContentMap.set(item.name, memoryContent);
+                            break;
+                        }
+                        case 'skip':
+                        default:
+                            break;
                     }
                 }
 
@@ -1510,6 +1585,7 @@ export class ProjectConfiguration<T extends BuilderConfigData>
                     for (const entry of fs.readdirSync(targetsRoot)) {
                         if (!index.has(entry)) {
                             fs.rmSync(NodePath.join(targetsRoot, entry), { recursive: true, force: true });
+                            this.targetDiskContentMap.delete(entry);
                         }
                     }
                 }
@@ -1518,7 +1594,29 @@ export class ProjectConfiguration<T extends BuilderConfigData>
             }
         }
 
+        // 骨架 eide.yml 的保护: 若磁盘已被外部手改, 绝不以内存旧值覆写, 反向重载
+        if (this.cfgFile.IsExist()) {
+            const currentSkeleton = this.cfgFile.Read();
+            const lastSkeleton = this.lastDiskSkeletonContent;
+            const memorySkeleton = this.toString();
+
+            const skelDecision = decideYamlFileSave({
+                memoryContent: memorySkeleton,
+                lastDiskContent: lastSkeleton,
+                currentDiskContent: currentSkeleton
+            });
+
+            if (skelDecision === 'reload-from-disk') {
+                this.lastDiskSkeletonContent = currentSkeleton;
+                this.loadConfig(currentSkeleton);
+                return;
+            }
+        }
+
         super.Save();
+        if (this.cfgFile.IsExist()) {
+            this.lastDiskSkeletonContent = this.cfgFile.Read();
+        }
     }
 }
 

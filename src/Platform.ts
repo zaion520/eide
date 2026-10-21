@@ -156,10 +156,6 @@ export function osGetNullDev(): string {
 }
 
 export function createSafetyFileWatcher(_file: File, _recursive: boolean = false, watchSelfDir?: boolean) {
-    if (osPlatform != 'win32' &&
-        osPlatform != 'darwin') {
-        _recursive = false;
-    }
     return new FileWatcher(_file, _recursive, watchSelfDir);
 }
 

@@ -175,8 +175,8 @@ function writeZip(entries) {
 
 // ---- 主逻辑 ----
 
-/** 匹配 extension/package.nls.<locale>.json (locale 必须含大写字母) */
-const NLS_RE = /^(.*\/)?package\.nls\.([A-Za-z0-9-]+)\.json$/;
+/** 匹配 extension/package.nls.<locale>.json 及 extension/l10n/bundle.l10n.<locale>.json */
+const NLS_RE = /^(.*\/)?(package\.nls|bundle\.l10n)\.([A-Za-z0-9-]+)\.json$/;
 
 function main() {
     const vsix = process.argv[2];
@@ -205,14 +205,14 @@ function main() {
     for (const e of entries) {
         const m = NLS_RE.exec(e.name);
         if (!m) continue;
-        const [, dir = '', locale] = m;
+        const [, dir = '', prefix, locale] = m;
         const lower = locale.toLowerCase();
-        // 全小写 + 标准 BC P 47 写法(语言小写 / 地区大写): zh-cn -> zh-CN
+        // 全小写 + 标准 BCP 47 写法(语言小写 / 地区大写): zh-cn -> zh-CN
         const canonical = lower.replace(/-([a-z]{2})$/, (_, r) => '-' + r.toUpperCase());
         const variants = new Set([lower, canonical]);
         for (const v of variants) {
             if (v === locale) continue;                  // 与自身同名
-            const aliasName = `${dir}package.nls.${v}.json`;
+            const aliasName = `${dir}${prefix}.${v}.json`;
             if (byName.has(aliasName)) continue;         // 已存在, 幂等跳过
             if (additions.some(a => a.name === aliasName)) continue;
             additions.push({ name: aliasName, data: readEntryData(buf, e), from: e.name });
