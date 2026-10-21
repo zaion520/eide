@@ -39,6 +39,9 @@ export const EIDE_DIR = '.eide';
 /** EIDE 用户级主目录名(`~/.eide`,存放工具链/日志/Python 等;与项目内元数据目录同名,位置在用户主目录) */
 export const EIDE_HOME_DIR_NAME = EIDE_DIR;
 
+/** v4.2 每目标数据目录名(`.eide/targets/<name>/`) */
+export const TARGETS_DIR_NAME = 'targets';
+
 /** 项目配置文件名(各版本解析顺序: 先新后旧) */
 export const PROJECT_CONFIG_FILE_NAMES = ['eide.yml', 'eide.json'];
 

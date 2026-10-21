@@ -6,6 +6,10 @@
     "Yes": "确定",
     "No": "取消",
     "{0} target(s) deleted.": "{0} 个目标已删除。",
-    "Clangd config regenerated for target '{0}': compile_commands.json ({1} entries) + .clangd{2} !": "已按 target '{0}' 重新生成 clangd 配置: compile_commands.json ({1} 个条目) + .clangd{2} !",
-    " (stale cache cleared)": "(已清理旧缓存)"
+    " (stale cache cleared)": "(已清理旧缓存)",
+    "Clangd config regenerated for target '{0}': {1} entries. Cache: {2} Config: {3}": "已按 target '{0}' 重新生成 clangd 配置: {1} 个条目。缓存: {2} 配置: {3}",
+    "Clangd config regenerated with {0} problem(s):": "clangd 配置已重新生成,但存在 {0} 个问题:",
+    "Build the project at least once, then retry.": "请先执行一次构建,然后重试。",
+    "Check that '{0}' is writable and not locked by another program.": "请检查 '{0}' 是否可写、且未被其他程序占用。",
+    "The global cache directory is not writable.": "全局缓存目录不可写。"
 }

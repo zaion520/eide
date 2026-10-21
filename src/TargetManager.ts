@@ -374,8 +374,17 @@ export class TargetManager {
         this.host.save();
     }
 
-    /** 克隆一个已存在的目标(不切换激活目标) */
-    duplicate(sourceName: string, newName: string): void {
+    /**
+     * 克隆一个已存在的目标,并切换为激活目标。
+     *
+     * 切换是规格的一部分: 克隆的目的是在新目标上继续改配置,若留在原目标上,
+     * 用户的后续修改会落到源目标上,而新目标只是"看起来创建成功了"。
+     *
+     * 与 `create({cloneFrom})` 的差别: 这里源目标可能是当前激活目标,而激活目标的
+     * 最新运行时状态尚未写回 `targets[]`(平铺在根节点),所以必须先快照源目标,
+     * 否则克隆到的是磁盘上的旧数据。
+     */
+    duplicate(sourceName: string, newName: string): TargetSwitchResult {
         const err = this.validateName(newName);
         if (err) { throw new Error(err); }
         if (!this.has(sourceName)) {
@@ -383,11 +392,27 @@ export class TargetManager {
         }
 
         const prjConfigData = this.host.getConfig();
-        prjConfigData.targets[newName] = copyObject(prjConfigData.targets[sourceName]);
+
+        // 源目标是激活目标时,先把它平铺在根节点的最新状态快照回去
+        if (prjConfigData.mode === sourceName) {
+            prjConfigData.targets[sourceName] = snapshotCurrentTarget(prjConfigData, this.host.snapshotContext());
+        }
+
+        const cloned = copyObject(prjConfigData.targets[sourceName]);
+        const prevTargetName = prjConfigData.mode;
+        prjConfigData.targets[newName] = cloned;
 
         this.host.copyTargetSidecars(sourceName, newName);
+
+        // 切换到克隆目标(与 create 同一条激活链: 应用工具链/烧录器 + 搬运根节点)
+        this.activate(newName, cloned);
+        this.host.refreshSourceTree();
+
         this.host.emitTargetEvent('targetCreated', { name: newName });
+        this.host.emitTargetEvent('targetSwitched', { name: newName, isNew: true });
         this.host.save();
+
+        return { name: newName, isNew: true };
     }
 
     /** 删除目标;激活目标不可删除(旁路文件一并清理) */

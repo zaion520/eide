@@ -37,7 +37,7 @@
     "homepage": "https://em-ide.com",
     "license": "MIT",
     "description": "A mcu development environment for 8051/AVR/STM8/Cortex-M/MIPS/RISC-V",
-    "version": "3.27.65",
+    "version": "3.27.74",
     "preview": false,
     "engines": {
         "vscode": "^1.89.0"
@@ -102,7 +102,7 @@
         "watch": "tsc -watch -p ./",
         "test": "npm run compile && node ./node_modules/vscode/bin/test",
         "test:unit": "tsc -p test/tsconfig.json && node --test \"out/tmp/test/scripts/*.test.js\"",
-    "pack:install": "node scripts/package-and-install.js",
+        "pack:install": "node scripts/package-and-install.js",
         "build:callgraph-view": "npm --prefix src/html/callgraph_view run build"
     },
     "devDependencies": {

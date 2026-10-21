@@ -141,7 +141,7 @@ func anyOfJVal(v *JVal) any {
 
 // toAbsToolPath(1361-1364)
 func (g *CmdGenerator) toAbsToolPath(repath string) string {
-	return g.binDir + strings.ReplaceAll(repath, "${toolPrefix}", g.toolPrefix)
+	return g.resolveToolPath(g.binDir + strings.ReplaceAll(repath, "${toolPrefix}", g.toolPrefix))
 }
 
 // getOtherUtilToolFullPath(1372-1377)
@@ -151,7 +151,27 @@ func (g *CmdGenerator) getOtherUtilToolFullPath(name string) string {
 		path = grp.Str("$path")
 	}
 	path = strings.ReplaceAll(path, "${toolPrefix}", g.toolPrefix)
-	return replaceEnvVariable(g.binDir+path, false)
+	// 与 getActivedToolFullPath 同源: Wine 装的 Windows 工具链在模型里无 .exe 后缀,
+	// 必须回退探测, 否则 fromelf/armar 等辅助工具报 "not found"。
+	return replaceEnvVariable(g.executablePath(g.resolveToolPath(g.binDir+path)), false)
+}
+
+// executablePath 把“可执行文件路径”统一成 **当前 OS 能直接 exec 的形态**。
+//
+// 为什么要单独一个函数:
+//
+//	Wine 工具链下, 路径有两套形态且不能混用 ——
+//	  - 传给**工具自己的参数**(源文件/输出文件/响应文件): 必须是 Windows 路径
+//	    (`C:\\...` 或 `Z:/...`), 因为那是 Windows 程序在解析;
+//	  - 用来**启动进程**的 exe 路径: 必须仍是在 Linux 上真实存在的 POSIX 路径,
+//	    否则 `bash -c "C:\\users\\...\\fromelf.exe ..."` 找不到文件, Wine 的
+//	    `start.exe` 兜底接管 → 新建一整个 Wine 会话 → 每次调用多花 ~5s
+//	    (实测: 3 次 fromelf 从 0.8s 变成 15s)。
+func (g *CmdGenerator) executablePath(path string) string {
+	if !g.wineToolchain {
+		return path
+	}
+	return winePathToPosix(path, g.wineDriveMaps)
 }
 
 // hasOtherUtilTool(1385-1388)
@@ -253,8 +273,8 @@ func (g *CmdGenerator) genLinkCommand(objListIn []string, cliTestMode bool, opts
 	objList := append([]string{}, objListIn...)
 	if !cliTestMode && compilerId == "SDCC" {
 		sourcesObjs := append([]string{}, objList...)
-		var finalObjsLi []string    // absolute paths
-		var bundledList []string    // relative paths
+		var finalObjsLi []string // absolute paths
+		var bundledList []string // relative paths
 
 		if checkEntryOrderForSdcc {
 			mainName := "main"
@@ -480,7 +500,9 @@ func (g *CmdGenerator) genLinkCommand(objListIn []string, cliTestMode bool, opts
 
 	var commandLine string
 	if iFormat.UseFile {
-		commandLine = strings.ReplaceAll(iFormat.Body, "${value}", "\""+paramFile+"\"")
+		// paramFile 是绝对 POSIX 路径: Wine 工具链(armlink.exe)只认 Windows 路径,
+		// 必须经过同一套转换, 否则报 L3904U "Could not open via file"。
+		commandLine = strings.ReplaceAll(iFormat.Body, "${value}", "\""+g.toRelativePathForCompilerArgs(paramFile, false, false)+"\"")
 	} else {
 		commandLine = cmdLine
 	}
@@ -555,6 +577,11 @@ func (g *CmdGenerator) genOutputCommand(linkerOutputFile string, excludes []stri
 			"${linkerOutput}", g.toRelativePathForCompilerArgs(linkerOutputFile, true, true))
 		command = strings.ReplaceAll(command,
 			"${output}", g.toRelativePathForCompilerArgs(outFilePath, true, true))
+		// Wine 工具链: %TOOL_DIR% 必须展开成 Windows 路径, 否则 fromelf.exe 收到
+		// POSIX 路径无法定位自身; 且展开后不能再被当普通路径重复转换。
+		if g.wineToolchain {
+			command = strings.ReplaceAll(command, "%TOOL_DIR%", g.toolDirForCommand())
+		}
 		command = replaceEnvVariable(command, true)
 
 		commandsList = append(commandsList, CmdInfo{

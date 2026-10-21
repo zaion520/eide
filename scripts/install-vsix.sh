@@ -242,6 +242,19 @@ step "    node_modules: $NM_COUNT 项"
 cp ../out/repack.zip "$VSIX"
 step "3/5 重打包完成 ($(du -h "$VSIX" | cut -f1))"
 
+# ---- 3.5) 补小写 locale 的 package.nls 别名 ----
+#
+# VSCode 的 findMessageBundles() 用精确大小写拼 `package.nls.<locale>.json`,
+# 而 locale 已被 toLowerCase() 规范化(zh-cn)。Windows 大小写不敏感, 仓库里叫
+# zh-CN 也能命中; Linux/macOS 区分大小写 -> 找不到 -> 剥成 'zh' 也找不到 ->
+# 整个扩展回退英文(表现: 运行时提示中文, 右键菜单/命令标题英文)。
+#
+# 又因为 Windows 上建不出两个只差大小写的文件(NTFS 查询不敏感), 只能在 zip
+# 层面注入 —— zip 条目名区分大小写。
+if [ -f "$REPO/scripts/fix-vsix-nls.js" ]; then
+    node "$(to_node_path "$REPO/scripts/fix-vsix-nls.js")" "$(to_node_path "$VSIX")" || { echo "package.nls 小写别名注入失败"; exit 1; }
+fi
+
 # ---- 4) 安装: 同卷暂存 + 原子 rename ----
 #
 # 为什么不在 extensions 目录里逐文件复制:

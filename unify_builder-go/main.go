@@ -2,11 +2,12 @@
 //
 // 上游:C# 单文件实现(6,068 行),见 docs/unify-builder-migration.md 的分区表。
 // 本文件保持与原版一致的 CLI 契约:
-//   unify_builder [-v] [-r commands.json] [-p builder.params]
-//                 [--rebuild] [--dry-run] [--only-dump-args]
-//                 [--only-dump-compilerdb] [--use-ccache]
-//                 [--out-makefile] [--no-color] [--force-color]
-//                 [--sdcc-not-bundle-rel]
+//
+//	unify_builder [-v] [-r commands.json] [-p builder.params]
+//	              [--rebuild] [--dry-run] [--only-dump-args]
+//	              [--only-dump-compilerdb] [--use-ccache]
+//	              [--out-makefile] [--no-color] [--force-color]
+//	              [--sdcc-not-bundle-rel]
 package main
 
 import (
@@ -24,18 +25,18 @@ const (
 
 // Options 对应 C# Options(2428-2468 行,CommandLineParser 定义),长选项名逐一对齐。
 type Options struct {
-	PrintVersion      bool
-	RunCommandsPath   string // -r, --run
-	ParamsFilePath    string // -p, --params-file
-	NotUseColor       bool   // --no-color
-	ForceUseColor     bool   // --force-color
-	ForceRebuild      bool   // --rebuild
-	OnlyPrintArgs     bool   // --only-dump-args
-	OnlyDumpCompilerDB bool  // --only-dump-compilerdb
-	UseCcache         bool   // --use-ccache
-	OutputMakefile    bool   // --out-makefile
-	DryRun            bool   // --dry-run
-	SdccNotBundleRel  bool   // --sdcc-not-bundle-rel
+	PrintVersion       bool
+	RunCommandsPath    string // -r, --run
+	ParamsFilePath     string // -p, --params-file
+	NotUseColor        bool   // --no-color
+	ForceUseColor      bool   // --force-color
+	ForceRebuild       bool   // --rebuild
+	OnlyPrintArgs      bool   // --only-dump-args
+	OnlyDumpCompilerDB bool   // --only-dump-compilerdb
+	UseCcache          bool   // --use-ccache
+	OutputMakefile     bool   // --out-makefile
+	DryRun             bool   // --dry-run
+	SdccNotBundleRel   bool   // --sdcc-not-bundle-rel
 }
 
 func printAppInfo() {

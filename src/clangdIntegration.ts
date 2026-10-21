@@ -18,10 +18,10 @@
  * 由 AbstractProject.UpdateCppConfig 防抖触发(始终开启,原 EIDE.Option.EnableClangdConfigGenerator 开关已移除)。
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { AbstractProject } from './EIDEProject';
-import { SettingManager } from './SettingManager';
 import { GlobalEvent } from './GlobalEvents';
 import { BuilderOptions } from './EIDETypeDefine';
 import { ToolchainManager } from './ToolchainManager';
@@ -30,20 +30,15 @@ import {
     buildClangdCommandTokens,
     buildClangdContextForTarget,
     toCompilationDatabaseEntry,
-    getProjectDbPath,
     getProjectDbDir,
     asCompileCommandFile,
     isSupportedSourceFile,
     createManagedConfigToken,
     pruneStaleManagedBlocks,
-    removeManagedBlocksAllFamilies,
     resolveClangdProjectConfigDir,
-    resolveClangdProjectConfigDirFor,
-    upsertProjectClangdConfigFile,
     isEideManagedProjectConfig,
     migrateCdbDirToClangd,
     PROJECT_CLANGD_CONFIG_NAME,
-    PROJECT_CDB_DIR_NAME,
     CDB_FILE_NAME,
     sanitizeClangdUserConfig,
     upsertClangdWorkspaceArgs,
@@ -52,6 +47,26 @@ import {
     isAc5Toolchain,
     resolveCompatShimKind,
 } from './clangdSupport';
+import {
+    resolveClangdCacheRoot,
+    getClangdCacheLayout,
+    ClangdCacheLayout
+} from './clangdCachePaths';
+import { atomicWriteFileSync } from './AtomicWrite';
+import { planCacheMigration } from './clangdCacheMigrate';
+import { collectSourceRootsForPathMatch, renderPathMatchForRoot } from './clangdSourceRoots';
+import {
+    renderManagedBlock,
+    upsertManagedBlock,
+    pruneStaleBlocks,
+} from './clangdUserConfigBlock';
+import {
+    verifyCdbContent,
+    verifyBlockUnique,
+    verifyBlockPointer,
+    summarizeSteps,
+    RebuildStep,
+} from './clangdRebuildVerify';
 
 const AC5_COMPAT_HEADER = 'lint_armcc_compat.h';
 const C51_COMPAT_HEADER = 'lint_c51_compat.h';
@@ -252,9 +267,35 @@ function getClangdUserConfigDir(): string | undefined {
     return home ? path.join(home, '.config', 'clangd') : undefined;
 }
 
-/** 工具链关键字 shim 的存放目录:`.eide/clangd/`(库本身已上移项目根,shim 不再跟库同目录) */
+/**
+ * 当前进程的 clangd 全局缓存根。
+ *
+ * 环境只在进程内读一次: 这些变量在扩展生命周期内不会变, 反复读会污染热路径。
+ */
+let cachedCacheRoot: string | undefined;
+export function getClangdCacheRoot(): string {
+    if (cachedCacheRoot === undefined) {
+        cachedCacheRoot = resolveClangdCacheRoot({
+            platform: process.platform,
+            env: process.env,
+            homedir: os.homedir()
+        });
+    }
+    return cachedCacheRoot;
+}
+
+/** 项目在全局缓存中的布局(CDB / shim / 索引) */
+export function getProjectCacheLayout(prj: AbstractProject): ClangdCacheLayout {
+    return getClangdCacheLayout(getClangdCacheRoot(), prj.getProjectRoot().path, process.platform);
+}
+
+/**
+ * 工具链关键字 shim 的存放目录:全局缓存 `<CACHE>/projects/<hash>/shim/`。
+ *
+ * 历史上它在 `.eide/clangd/`, 会往项目目录写生成物; 全局化后项目目录保持干净。
+ */
 function getClangdShimDir(prj: AbstractProject): string {
-    return path.join(prj.getEideDir().path, PROJECT_CDB_DIR_NAME);
+    return getProjectCacheLayout(prj).shimDir;
 }
 
 function writeIfChanged(filePath: string, content: string): boolean {
@@ -407,7 +448,7 @@ export function generateDbForTarget(prj: AbstractProject, targetName: string): n
         GlobalEvent.log_error(error);
     }
 
-    const dbPath = getProjectDbPath(rootDir);
+    const dbPath = getProjectCacheLayout(prj).cdbPath;
     const shimDir = getClangdShimDir(prj);
     const context = buildClangdContextForTarget({
         toolchain: stored.toolchain,
@@ -500,111 +541,52 @@ const BASE_REMOVE_FLAGS = [
 ];
 
 
-function fileSignature(filePath: string): string {
-    try {
-        const st = fs.statSync(filePath);
-        return `${st.mtimeMs}:${st.size}`;
-    } catch {
-        return 'missing';
-    }
-}
-
 /**
- * 项目级 `.clangd` 配置文件(方案 D):落盘/幂等更新。
- * 位置由 `resolveClangdProjectConfigDirFor` 决定:默认项目根;若本项目存在
- * **根外源码**(项目根只是 MDK/KEIL 构建目录,源码在兄弟目录),则上移到能
- * 覆盖全部 CDB 条目的公共祖先 —— clangd 只沿文件祖先链查找 `.clangd`,
- * 放在根内的配置对根外源码完全不可见(实测会导致编译数据库从不加载)。
- * 存在性检测由 upsertProjectClangdConfigFile 承担:用户手写的文件不触碰;
- * 内容不含 target 信息 → 切 target 时内容不变,零写盘。
+ * 收集当前 CDB 里的绝对源码路径(判定需要覆盖哪些源码根的事实依据)。
  */
-function updateProjectClangdConfigFile(prj: AbstractProject, toolchainName: string): boolean {
+function readCdbSourcePaths(prj: AbstractProject): string[] {
     const rootDir = prj.getProjectRoot().path;
-
-    // 读回刚生成的 CDB,取其条目解析出的绝对源码路径(判定覆盖范围的事实依据)
-    const sourceAbsPaths: string[] = [];
+    const result: string[] = [];
     try {
-        const raw = fs.readFileSync(getProjectDbPath(rootDir), 'utf8');
+        const raw = fs.readFileSync(getProjectCacheLayout(prj).cdbPath, 'utf8');
         const entries: any[] = JSON.parse(raw);
         for (const e of entries) {
             if (!e || typeof e.file !== 'string') { continue; }
             const dir = e.directory ? String(e.directory) : rootDir;
-            sourceAbsPaths.push(path.resolve(dir, e.file));
+            result.push(path.resolve(dir, e.file));
         }
     } catch {
-        // CDB 缺失/损坏:回退既有位置(后续刷新会重建)
+        // CDB 缺失/损坏: 退化为只覆盖项目根(后续刷新会重建)
     }
-
-    const resolved = resolveClangdProjectConfigDirFor(rootDir, sourceAbsPaths);
-    const configDir = resolved.configDir;
-    if (resolved.relocated) {
-        GlobalEvent.log_info(`project '.clangd' placed at '${configDir}' (${resolved.reason})`);
-        // 位置变更后,清理**上一版 EIDE 生成**的旧文件(仅当仍带 EIDE 标记),
-        // 否则同一项目会残留两份 CompilationDatabase 指针(旧的那份还会以
-        // "项目根的配置文件"身份参与 clangd 配置合并,造成事实源二义)。
-        // 用户手写的文件不带标记,绝不触碰。
-        const stalePath = path.join(resolveClangdProjectConfigDir(rootDir), PROJECT_CLANGD_CONFIG_NAME);
-        if (path.resolve(stalePath) !== path.resolve(path.join(configDir, PROJECT_CLANGD_CONFIG_NAME))) {
-            try {
-                if (fs.existsSync(stalePath) && fs.statSync(stalePath).isFile() &&
-                    isEideManagedProjectConfig(fs.readFileSync(stalePath, 'utf8'))) {
-                    fs.unlinkSync(stalePath);
-                    GlobalEvent.log_info(`stale EIDE '.clangd' at '${stalePath}' removed (superseded by the relocated one)`);
-                }
-            } catch (error) {
-                GlobalEvent.log_error(error);
-            }
-        }
-    } else if (resolved.reason.startsWith('no-common') || resolved.reason.startsWith('ancestor-') || resolved.reason === 'foreign-project-root') {
-        // 根外源码存在但无法安全上移:CDB 本身仍带着完整 flags,只是这几个文件
-        // 拿不到项目级配置 —— 明确告警,不要静默
-        GlobalEvent.log_warn(`project '.clangd' stays at '${configDir}' but ${resolved.reason}: ` +
-            `sources outside this directory may not get the compile database`);
-    }
-
-    const configPath = path.join(configDir, PROJECT_CLANGD_CONFIG_NAME);
-    // CompilationDatabase 相对配置文件所在目录解析(文档语义), POSIX 化
-    const compilationDatabase = toPosix(path.relative(configDir, getProjectDbDir(rootDir)) || '.');
-    try {
-        const result = upsertProjectClangdConfigFile(configPath, {
-            compilationDatabase,
-            addFlags: [],
-            removeFlags: BASE_REMOVE_FLAGS,
-            suppressDiagnostics: isDiagnosticUnsupportedToolchain(toolchainName) ? ['*'] : ['unused-includes']
-        });
-        if (result === 'skipped-user-owned') {
-            GlobalEvent.log_info(`project '.clangd' at '${configPath}' is user-owned, EIDE leaves it untouched`);
-            return false;
-        }
-        if (result === 'skipped-directory') {
-            GlobalEvent.log_error(`project '.clangd' at '${configPath}' is a directory (legacy CDB layout not migrated?)`);
-            return false;
-        }
-        return result === 'created' || result === 'updated';
-    } catch (error) {
-        GlobalEvent.log_error(error);
-        return false;
-    }
+    return result;
 }
 
-/** 用户级 config.yaml 迁移移除的短路缓存(同签名免重读) */
-const userConfigRemovalState = new Map<string, string>();
-
 /**
- * 方案 D 迁移:把**本项目 token** 的受管块从用户级 config.yaml 移除(两标记族)。
- * 顺带保留既有治理:结构自愈(sanitize)+ 僵尸块回收(pruneStaleManagedBlocks,
- * 清其他项目/历史版本遗留的失效块)。其他项目的有效块保留,各自升级时迁移。
+ * 全局缓存方案: 把本项目的受管块写进用户级 `config.yaml`。
+ *
+ * clangd 只认这一个配置文件(实测不支持 `config.d/` 目录), 所以多项目共用它。
+ * 每个项目一个带 token 的块, 块内**每个源码根一条 PathMatch 片段**, 全部指向
+ * 该项目在全局缓存里的 CDB 目录(实测 `CompilationDatabase` 接受绝对路径)。
+ *
+ * 与方案 D 的关键差别: 不再需要把 `.clangd` 上移到"能覆盖全部源码的公共祖先",
+ * 因此彻底摆脱了"根外源码拿不到配置"的启发式回退。
+ *
+ * @returns true 表示本次有写入
  */
-function removeOwnManagedBlocksFromUserConfig(prj: AbstractProject): boolean {
+function updateUserConfigManagedBlock(prj: AbstractProject, toolchainName: string): boolean {
     const configDir = getClangdUserConfigDir();
-    if (!configDir) { return false; }
+    if (!configDir) {
+        GlobalEvent.log_warn('clangd user config dir not found, skip writing managed block');
+        return false;
+    }
 
     const configPath = path.join(configDir, 'config.yaml');
     const token = createManagedConfigToken(prj.getProjectRoot().path);
+    const layout = getProjectCacheLayout(prj);
 
-    // 短路:文件签名未变 → 上次已移除且无外部改动,免读免写
-    const sig = fileSignature(configPath);
-    if (userConfigRemovalState.get(configPath) === sig) { return false; }
+    const sourceAbsPaths = readCdbSourcePaths(prj);
+    const roots = collectSourceRootsForPathMatch(prj.getProjectRoot().path, sourceAbsPaths, process.platform);
+    const pathMatches = roots.map((r) => renderPathMatchForRoot(r, process.platform));
 
     let existingContent = '';
     try {
@@ -615,29 +597,75 @@ function removeOwnManagedBlocksFromUserConfig(prj: AbstractProject): boolean {
     }
 
     const pathExists = (p: string) => { try { return !!p && fs.existsSync(p); } catch { return false; } };
+
+    // 结构自愈 + 僵尸块回收(共享文件必须持续治理,否则会无限累积)
     const sanitized = sanitizeClangdUserConfig(existingContent);
-    const pruned = pruneStaleManagedBlocks(sanitized.content, {
+    const prunedStale = pruneStaleManagedBlocks(sanitized.content, {
         pathExists,
         dbExists: pathExists,
-        // 本项目子树内的旧块 = 项目根重定位前的残留(旧根是新根的子目录),一并回收
         currentRoot: prj.getProjectRoot().path
     });
-    const removed = removeManagedBlocksAllFamilies(pruned.content, token);
-    const nextContent = removed.content;
+    const prunedStaleLegacy = pruneStaleBlocks(prunedStale.content, pathExists);
 
-    const changed = nextContent !== existingContent ? writeIfChanged(configPath, nextContent) : false;
-    userConfigRemovalState.set(configPath, fileSignature(configPath));
-    if (changed) {
-        GlobalEvent.log_info(`user config.yaml: removed ${removed.removed} managed block(s) for this project (migrated to project-level '.clangd')`);
+    const block = renderManagedBlock({
+        token,
+        pathMatches,
+        compilationDatabase: toPosix(layout.projectDir),
+        removeFlags: BASE_REMOVE_FLAGS,
+        suppressDiagnostics: isDiagnosticUnsupportedToolchain(toolchainName) ? ['*'] : ['unused-includes']
+    });
+
+    const nextContent = upsertManagedBlock(prunedStaleLegacy.content, block, token);
+    if (nextContent === existingContent) { return false; }
+
+    try {
+        fs.mkdirSync(configDir, { recursive: true });
+        const ok = atomicWriteFileSync(configPath, nextContent);
+        if (!ok) {
+            GlobalEvent.log_error(`failed to write clangd user config '${configPath}'`);
+            return false;
+        }
+        GlobalEvent.log_info(`clangd user config: managed block for '${prj.getProjectRoot().path}' updated ` +
+            `(${pathMatches.length} fragment(s) -> ${toPosix(layout.projectDir)})`);
+        if (prunedStale.removedFragments > 0) {
+            GlobalEvent.log_info(`clangd user config: pruned ${prunedStale.removedFragments} over-broad PathMatch fragment(s)`);
+        }
+        if (prunedStaleLegacy.removed > 0) {
+            GlobalEvent.log_info(`clangd user config: removed ${prunedStaleLegacy.removed} stale managed block(s)`);
+        }
+        return true;
+    } catch (error) {
+        GlobalEvent.log_error(error);
+        return false;
     }
-    if (pruned.removedFragments > 0) {
-        // 越界片段(祖先级通配)会抢在其他项目的项目级 .clangd 之前命中,
-        // 把兄弟项目的编译数据库截胡 —— 记录一条便于排查"某项目满屏红"的日志
-        GlobalEvent.log_info(`user config.yaml: pruned ${pruned.removedFragments} over-broad PathMatch fragment(s) ` +
-            `(ancestor-level wildcards hijack sibling projects' compile databases)`);
-    }
-    return changed;
 }
+
+/**
+ * 清理**上一版 EIDE 生成**的项目级 `.clangd` 文件(仅带 EIDE 标记时删除)。
+ * 用户手写的文件不带标记, 绝不触碰。
+ */
+function removeLegacyProjectClangdFile(prj: AbstractProject): boolean {
+    let removed = false;
+    const candidates: string[] = [];
+    try {
+        candidates.push(path.join(resolveClangdProjectConfigDir(prj.getProjectRoot().path), PROJECT_CLANGD_CONFIG_NAME));
+        candidates.push(path.join(prj.getProjectRoot().path, PROJECT_CLANGD_CONFIG_NAME));
+    } catch { /* ignore */ }
+
+    for (const file of [...new Set(candidates)]) {
+        try {
+            if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { continue; }
+            if (!isEideManagedProjectConfig(fs.readFileSync(file, 'utf8'))) { continue; }
+            fs.unlinkSync(file);
+            GlobalEvent.log_info(`legacy EIDE project '.clangd' at '${file}' removed (global cache layout)`);
+            removed = true;
+        } catch (error) {
+            GlobalEvent.log_error(error);
+        }
+    }
+    return removed;
+}
+
 // ---------------------------------------------------------------------------
 // 3. workspace settings (clangd.arguments)
 // ---------------------------------------------------------------------------
@@ -690,23 +718,26 @@ function updateClangdWorkspaceFileExclude(prj: AbstractProject): boolean {
     const uri = vscode.Uri.file(prj.getProjectRoot().path);
     const filesConfig = vscode.workspace.getConfiguration('files', uri);
     const inspect = filesConfig.inspect<Record<string, boolean>>('exclude');
+    // 全局缓存方案: CDB 已不在项目内, 旧键全部让位(不再隐藏任何东西)。
+    // 保留本函数是为了**清理**历史键, 否则用户工作区会残留无意义的排除项。
     const EXCLUDE_KEY = '**/clangd/compile_commands.json';
-    const LEGACY_KEYS = ['**/.clangd', '**/.clangd/compile_commands.json'];
+    const LEGACY_KEYS = [
+        EXCLUDE_KEY,
+        '**/.clangd',
+        '**/.clangd/compile_commands.json',
+        '**/.eide-clangd/**'
+    ];
 
     const nextValue = (stored: Record<string, boolean> | undefined): Record<string, boolean> => {
         const merged: Record<string, boolean> = { ...(stored || {}) };
-        for (const k of LEGACY_KEYS) { delete merged[k]; } // 迁移:旧 .clangd 相关键全部让位
-        merged[EXCLUDE_KEY] = true;
+        for (const k of LEGACY_KEYS) { delete merged[k]; } // 迁移: 旧 clangd 产物已不在项目内
         return merged;
     };
 
     const differs = (stored: Record<string, boolean> | undefined): boolean => {
-        const wanted = nextValue(stored);
         const cur = stored || {};
-        // 只要还有旧的整目录键、或缺少库文件键,就需要写
-        const hasLegacy = LEGACY_KEYS.some((k) => cur[k] === true);
-        return hasLegacy || cur[EXCLUDE_KEY] !== true
-            || Object.keys(cur).length !== Object.keys(wanted).length;
+        // 只要还残留任一历史键, 就需要写一次(把它们清掉)
+        return LEGACY_KEYS.some((k) => cur[k] !== undefined);
     };
 
     const write = (existing: Record<string, boolean> | undefined, target: vscode.ConfigurationTarget): void => {
@@ -833,42 +864,230 @@ async function doRestartClangd(): Promise<boolean> {
 
 export interface RebuildClangdCacheResult {
     targetName: string;
+    /** CDB 条目数; -1 = 缺 builder.params(从未构建过) */
     entries: number;
-    cacheCleared: boolean;
+    /** 已清理的旧产物(相对路径或说明) */
+    cleared: string[];
+    /** 逐步结果,失败项带原因 */
+    steps: RebuildStep[];
+    /** 全部关键步骤通过校验 */
+    ok: boolean;
+    /** 本次使用的全局缓存目录(诊断用) */
+    projectCacheDir: string;
+    /** 用户级 config.yaml 路径 */
+    userConfigPath: string;
 }
 
 /**
- * 重新生成 clangd 配置(维修通道,右键菜单"生成 clangd 配置"):
- * 产出两件套 —— `<root>/clangd/compile_commands.json`(编译数据库)与
- * 项目级 `.clangd` 配置文件(位置由 resolveClangdProjectConfigDirFor 按源码覆盖范围推导)。
- * 先清空:删 `<root>/clangd/` 整目录(库 + 后台索引 `.cache` 一锅端)+ 旧布局残留
- * (根目录库/`.cache`/`.eide-clangd/`)→ 走重生全链路 → 唤醒 clangd。
- * 日常增删文件走自动管线,不需要它;库损坏/换代残留时用它一键恢复(幂等,可重跑)。
+ * 重新生成 clangd 配置(维修通道,右键菜单"生成 clangd 配置")。
+ *
+ * 语义是**强制修复到已知良好状态**, 不依赖任何既有缓存:
+ *  1. 探测全局缓存根可写性(不可写则明确报告,不静默降级)
+ *  2. 清空本项目缓存目录(CDB + shim + 后台索引 .cache)
+ *  3. 清理旧布局残留(项目内 `<root>/clangd/`、带 EIDE 标记的 `.clangd`、`.eide-clangd/`)
+ *  4. 重新生成 shim 与 CDB
+ *  5. 移除本项目所有标记族的块, 写入一个干净块
+ *  6. **逐项校验**: CDB 合法且条目数一致 / 块唯一 / 指针正确
+ *  7. 唤醒 clangd
+ *
+ * 与原实现的区别: 原版把所有 `update*` 的失败都吞进 log_error, 用户看到"成功"
+ * 但可能什么都没写成。现在每一步都有可判定的结果, UI 可据此明确报告。
  */
 export function rebuildClangdCache(prj: AbstractProject): RebuildClangdCacheResult {
-    const rootDir = prj.getProjectRoot().path;
     const targetName = prj.getCurrentTarget();
+    const rootDir = prj.getProjectRoot().path;
+    const layout = getProjectCacheLayout(prj);
+    const configDir = getClangdUserConfigDir();
+    const userConfigPath = configDir ? path.join(configDir, 'config.yaml') : '';
+    const token = createManagedConfigToken(rootDir);
+    const cleared: string[] = [];
+    const steps: RebuildStep[] = [];
 
-    let cacheCleared = false;
+    // 1) 全局缓存根可写性
+    const probe = probeCacheRoot(getClangdCacheRoot());
+    steps.push({
+        name: 'cache-root',
+        ok: probe.ok,
+        detail: probe.ok ? getClangdCacheRoot() : `${getClangdCacheRoot()}: ${probe.reason}`
+    });
+
+    // 2) 清空本项目缓存目录(索引一并清掉: 维修通道的语义就是"从头来过")
     try {
-        const managedDir = getProjectDbDir(rootDir);
-        if (fs.existsSync(managedDir)) {
-            fs.rmSync(managedDir, { recursive: true, force: true });
-            cacheCleared = true;
+        if (fs.existsSync(layout.projectDir)) {
+            fs.rmSync(layout.projectDir, { recursive: true, force: true });
+            cleared.push(layout.projectDir);
         }
     } catch (error) {
         GlobalEvent.log_error(error);
     }
-    cacheCleared = cleanupLegacyClangdArtifacts(prj) || cacheCleared;
 
+    // 3) 旧布局残留(先尝试保留索引迁移, 再兜底清理)
+    if (migrateProjectCdbToCache(prj)) { cleared.push('legacy in-project clangd dir (migrated)'); }
+    const projectDbDir = getProjectDbDir(rootDir);
+    try {
+        if (fs.existsSync(projectDbDir)) {
+            fs.rmSync(projectDbDir, { recursive: true, force: true });
+            cleared.push(projectDbDir);
+        }
+    } catch (error) {
+        GlobalEvent.log_error(error);
+    }
+    if (cleanupLegacyClangdArtifacts(prj)) { cleared.push('legacy clangd artifacts'); }
+    if (removeLegacyProjectClangdFile(prj)) { cleared.push(`project '${PROJECT_CLANGD_CONFIG_NAME}'`); }
+
+    // 4) 重新生成 shim + CDB
     const entries = generateDbForTarget(prj, targetName);
-    updateProjectClangdConfigFile(prj, prj.getToolchain().name);
-    removeOwnManagedBlocksFromUserConfig(prj);
-    updateClangdWorkspaceSettings(prj);
-    updateClangdWorkspaceFileExclude(prj);
-    tryRestartClangd();
+    steps.push({ name: 'shim', ok: true, detail: layout.shimDir });
 
-    return { targetName, entries: Math.max(entries, 0), cacheCleared };
+    // 校验 CDB(读回,不信任写入返回值)
+    try {
+        const raw = fs.readFileSync(layout.cdbPath, 'utf8');
+        steps.push(verifyCdbContent(raw, entries));
+    } catch (error: any) {
+        steps.push({ name: 'cdb', ok: false, detail: `cannot read back '${layout.cdbPath}': ${error?.message || error}` });
+    }
+
+    // 5) 用户级受管块: 先移除本项目所有标记族, 再写一个干净块
+    updateUserConfigManagedBlock(prj, prj.getToolchain().name);
+
+    // 6) 校验块: 唯一 + 指针正确
+    if (!userConfigPath) {
+        steps.push({ name: 'config-block', ok: false, detail: 'clangd user config dir not found' });
+    } else {
+        let content = '';
+        try {
+            content = fs.readFileSync(userConfigPath, 'utf8');
+        } catch (error: any) {
+            steps.push({ name: 'config-block', ok: false, detail: `cannot read '${userConfigPath}': ${error?.message || error}` });
+        }
+        if (content || content === '') {
+            const unique = verifyBlockUnique(content, token);
+            const pointer = verifyBlockPointer(content, token, toPosix(layout.projectDir));
+            if (unique.ok && pointer.ok) {
+                steps.push({ name: 'config-block', ok: true, detail: userConfigPath });
+            } else {
+                steps.push(unique.ok ? pointer : unique);
+            }
+        }
+    }
+
+    // 7) 工作区设置
+    try {
+        updateClangdWorkspaceSettings(prj);
+        steps.push({ name: 'workspace-settings', ok: true });
+    } catch (error: any) {
+        steps.push({ name: 'workspace-settings', ok: false, detail: String(error?.message || error) });
+    }
+    try {
+        updateClangdWorkspaceFileExclude(prj);
+        steps.push({ name: 'file-exclude', ok: true });
+    } catch (error: any) {
+        steps.push({ name: 'file-exclude', ok: false, detail: String(error?.message || error) });
+    }
+
+    // 8) 唤醒 clangd
+    tryRestartClangd();
+    steps.push({ name: 'restart', ok: true });
+
+    const summary = summarizeSteps(steps);
+    return {
+        targetName,
+        entries,
+        cleared,
+        steps,
+        ok: summary.ok,
+        projectCacheDir: layout.projectDir,
+        userConfigPath
+    };
+}
+
+/** 探测目录可写性(建目录 + 写探针文件 + 删除) */
+function probeCacheRoot(cacheRoot: string): { ok: boolean; reason?: string } {
+    const probeFile = path.join(cacheRoot, `.probe-${process.pid}-${Date.now()}`);
+    try {
+        fs.mkdirSync(cacheRoot, { recursive: true });
+        fs.writeFileSync(probeFile, 'ok', 'utf8');
+        fs.unlinkSync(probeFile);
+        return { ok: true };
+    } catch (error: any) {
+        try { fs.unlinkSync(probeFile); } catch { /* ignore */ }
+        return { ok: false, reason: error?.message || String(error) };
+    }
+}
+
+/**
+ * 把项目内旧布局(`<root>/clangd/`)迁移到全局缓存。
+ *
+ * 顺序刻意如此(崩溃安全): 先把 CDB 与索引缓存搬到全局, 确认成功后才删项目内目录。
+ * 中途崩溃最多留下"两份都在", 下次运行会因全局已存在而跳过搬运, 最终仍会清理项目内目录。
+ *
+ * 跨卷 rename 会抛 `EXDEV`(项目在 D:, 缓存在 C:), 此时降级为复制 + 删除。
+ * 索引缓存 `.cache/` 优先 rename 以保留(否则 clangd 要重建全部索引)。
+ *
+ * @returns true 表示发生了迁移
+ */
+export function migrateProjectCdbToCache(prj: AbstractProject): boolean {
+    const rootDir = prj.getProjectRoot().path;
+    const legacyDir = getProjectDbDir(rootDir);
+    if (!fs.existsSync(legacyDir)) { return false; }
+
+    const layout = getProjectCacheLayout(prj);
+    let changed = false;
+
+    const legacyCdb = path.join(legacyDir, CDB_FILE_NAME);
+    const legacyCache = path.join(legacyDir, '.cache');
+    const plan = planCacheMigration({
+        legacyCdbExists: fs.existsSync(legacyCdb),
+        globalCdbExists: fs.existsSync(layout.cdbPath),
+        legacyCacheExists: fs.existsSync(legacyCache),
+        globalCacheExists: fs.existsSync(layout.indexCacheDir)
+    });
+
+    try {
+        if (plan.moveCdb || plan.moveIndexCache) {
+            fs.mkdirSync(layout.projectDir, { recursive: true });
+        }
+
+        // 1) CDB: 仅在全局还没有时搬运(全局优先, 避免覆盖更新的库)
+        if (plan.moveCdb) {
+            moveFileOrCopy(legacyCdb, layout.cdbPath);
+            changed = true;
+        }
+
+        // 2) 索引缓存: 优先 rename 保留
+        if (plan.moveIndexCache) {
+            moveFileOrCopy(legacyCache, layout.indexCacheDir);
+            changed = true;
+        }
+
+        // 3) 最后删除项目内目录(搬空后才会成功; 残留则下次再试)
+        if (plan.removeLegacyDir) {
+            try {
+                fs.rmSync(legacyDir, { recursive: true, force: true });
+                GlobalEvent.log_info(`legacy in-project clangd dir '${legacyDir}' migrated to global cache`);
+                changed = true;
+            } catch (error) {
+                GlobalEvent.log_warn(`cannot remove legacy clangd dir '${legacyDir}': ${String(error)}`);
+            }
+        }
+    } catch (error) {
+        GlobalEvent.log_error(error);
+    }
+
+    return changed;
+}
+
+/** 同卷 rename, 跨卷/占用时降级为复制+删除 */
+function moveFileOrCopy(from: string, to: string): void {
+    try {
+        fs.renameSync(from, to);
+        return;
+    } catch (error: any) {
+        if (error?.code !== 'EXDEV' && error?.code !== 'EPERM' && error?.code !== 'EBUSY') { throw error; }
+    }
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.cpSync(from, to, { recursive: true });
+    fs.rmSync(from, { recursive: true, force: true });
 }
 
 /** clangd 支持总入口:由 AbstractProject.UpdateCppConfig 防抖触发 */
@@ -877,7 +1096,6 @@ export function updateClangdIntegration(prj: AbstractProject): void {
     const tStart = Date.now();
     try {
         const toolchainName = prj.getToolchain().name;
-        const activeTargetKey = prj.getCurrentTarget();
 
         cleanupLegacyClangdArtifacts(prj); // 升级清理旧布局残留(.eide-clangd/根库/根 .cache),不计入 changed
         let changed = migrateLegacyClangdConfig(prj);
@@ -890,9 +1108,10 @@ export function updateClangdIntegration(prj: AbstractProject): void {
                 GlobalEvent.log_error("both '.clangd/' and 'clangd/' exist - resolve manually, project config file skipped");
                 break;
         }
+        changed = migrateProjectCdbToCache(prj) || changed;
         changed = generateClangdCompilationDatabase(prj) || changed;
-        changed = updateProjectClangdConfigFile(prj, toolchainName) || changed;
-        changed = removeOwnManagedBlocksFromUserConfig(prj) || changed;
+        changed = updateUserConfigManagedBlock(prj, toolchainName) || changed;
+        changed = removeLegacyProjectClangdFile(prj) || changed;
         changed = updateClangdWorkspaceSettings(prj) || changed;
         changed = updateClangdWorkspaceFileExclude(prj) || changed;
 

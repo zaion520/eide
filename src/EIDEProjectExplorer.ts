@@ -76,6 +76,7 @@ import {
     BuilderOptions, CreateOptions, VirtualFolder, VirtualFile, ImportOptions, ProjectTargetInfo, ProjectConfigData, ProjectType, ProjectBaseApi } from './EIDETypeDefine';
 import { ProjectConfiguration } from './ProjectConfiguration';
 import { applyTargetToConfigData, makeTargetInfo, formatBuildAllSummary, BuildTargetResult } from './TargetManager';
+import { planTargetRestore } from './buildAllRestore';
 import { BuildAllStatus } from './BuildAllStatus';
 import {
     computeLevelDelta, findProjectRootsUnder, rewriteConfigRelativePaths, auditExternalReferences,
@@ -1303,10 +1304,33 @@ export class ProjectExplorer implements CustomConfigurationProvider {
 
         try {
             const result = rebuildClangdCache(prj);
-            GlobalEvent.show_msgbox('Info',
-                vscode.l10n.t("Clangd config regenerated for target '{0}': compile_commands.json ({1} entries) + .clangd{2} !",
-                    result.targetName, result.entries,
-                    result.cacheCleared ? '' : vscode.l10n.t(' (stale cache cleared)')));
+
+            if (result.ok) {
+                GlobalEvent.show_msgbox('Info',
+                    vscode.l10n.t(
+                        "Clangd config regenerated for target '{0}': {1} entries. Cache: {2} Config: {3}",
+                        result.targetName, String(result.entries),
+                        result.projectCacheDir, result.userConfigPath));
+                return;
+            }
+
+            // 维修通道失败必须明确报告每一步原因,不能伪装成成功
+            const failed = result.steps.filter((s) => !s.ok);
+            const lines = failed.map((s) => `  - ${s.name}: ${s.detail || 'failed'}`);
+            const hints: string[] = [];
+            if (failed.some((s) => s.name === 'cdb' && /builder\.params/i.test(s.detail || ''))) {
+                hints.push(vscode.l10n.t('Build the project at least once, then retry.'));
+            }
+            if (failed.some((s) => s.name === 'config-block')) {
+                hints.push(vscode.l10n.t("Check that '{0}' is writable and not locked by another program.", result.userConfigPath));
+            }
+            if (failed.some((s) => s.name === 'cache-root')) {
+                hints.push(vscode.l10n.t('The global cache directory is not writable.'));
+            }
+            GlobalEvent.show_msgbox('Warning',
+                vscode.l10n.t("Clangd config regenerated with {0} problem(s):", String(failed.length)) +
+                '\n' + lines.join('\n') +
+                (hints.length ? '\n\n' + hints.join('\n') : ''));
         } catch (error) {
             this.showTargetOperationError(error);
         }
@@ -1384,17 +1408,11 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             } else {
                 await this.buildAllTargetsSerial(prj, names, results, status);
             }
-
-            // restore original active target whichever path taken
-            try {
-                if (prj.getCurrentTarget() !== originalTarget) {
-                    status.Step(`restoring active target '${originalTarget}' ...`);
-                    await prj.switchTarget(originalTarget);
-                }
-            } catch (error) {
-                GlobalEvent.log_error(error);
-            }
         } finally {
+            // 恢复必须放在 finally: 构建路径抛异常时也要切回原 target,
+            // 否则用户会停在某个中间 target 上(判定见 buildAllRestore)
+            await this.restoreActiveTarget(prj, originalTarget, status);
+
             // 恢复后补一次完整刷新(cpptools + 编译数据库 + clangd),只针对最终激活的 target
             prj.resumeCppConfigUpdate(true);
         }
@@ -1415,6 +1433,48 @@ export class ProjectExplorer implements CustomConfigurationProvider {
         const summary = formatBuildAllSummary(results);
         GlobalEvent.log_info(`--- Build all targets: ${prj.getProjectName()} ---\n${summary.text}`);
         GlobalEvent.show_msgbox(summary.hasFailure ? 'Warning' : 'Info', summary.text);
+    }
+
+    /**
+     * 把激活 target 恢复到构建前的那一个。
+     *
+     * 为什么单独成方法: 并行路径在 `jobs` 为空时会提前 return, 恢复语句若内联在
+     * 主流程里极易被漏掉; 这里统一入口, 两条路径都在 try 里调用。
+     * 原 target 已被删除/重命名时明确告警, 不静默停在别的 target 上。
+     */
+    private async restoreActiveTarget(prj: AbstractProject, originalTarget: string, status: BuildAllStatus): Promise<void> {
+        let plan;
+        try {
+            plan = planTargetRestore({
+                originalTarget,
+                currentTarget: prj.getCurrentTarget(),
+                availableTargets: prj.getTargetManager().getNames()
+            });
+        } catch (error) {
+            GlobalEvent.log_error(error);
+            return;
+        }
+
+        if (plan.action === 'none') { return; }
+
+        if (plan.action === 'unavailable') {
+            const msg = `Cannot restore active target '${originalTarget}': it no longer exists. ` +
+                `The active target is now '${prj.getCurrentTarget()}'.`;
+            status.Warn(msg);
+            GlobalEvent.log_warn(msg);
+            return;
+        }
+
+        status.Step(`restoring active target '${plan.target}' ...`);
+        try {
+            await prj.switchTarget(<string>plan.target);
+            status.Ok(`active target restored to '${plan.target}'`);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            status.Fail(`restore active target '${plan.target}' failed`);
+            status.FailReason(message);
+            GlobalEvent.log_error(error);
+        }
     }
 
     /** 原串行路径:逐个 switchTarget + buildProject(开关关闭/单 target 时使用) */

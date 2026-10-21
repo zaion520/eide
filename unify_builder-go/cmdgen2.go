@@ -105,7 +105,43 @@ func (g *CmdGenerator) getActivedRawToolPath(name string) string {
 	return g.models[name].Str("$path")
 }
 func (g *CmdGenerator) getActivedToolFullPath(name string) string {
-	return g.binDir + g.getActivedRawToolPath(name)
+	if cached, ok := g.toolPathCache[name]; ok {
+		return cached
+	}
+	resolved := g.resolveToolPath(g.binDir + g.getActivedRawToolPath(name))
+	if g.toolPathCache == nil {
+		g.toolPathCache = make(map[string]string)
+	}
+	g.toolPathCache[name] = resolved
+	return resolved
+}
+
+// resolveToolPath: 把"模型里声明的工具路径"解析成磁盘上真实存在的文件。
+//
+// 背景(实测): Windows 专用工具链(AC5/AC6/IAR/Keil C51 等)的模型里 "$path" 不带
+// 后缀(如 "bin/armclang"), 因为 prepareModel 只在 osWin32 时补 ".exe"。但在
+// Linux/macOS 上用 Wine 安装这些工具链时, 目录里只有 armclang.exe, 于是
+// checkTool 的 os.Stat 失败, 报 "Not found 'C Compiler'"。
+//
+// 这里做一次惰性回退: 原路径不存在且不是 Windows 时, 尝试追加 ".exe"。
+// 只在文件确实存在时才替换, 因此对 Linux 原生工具链(GCC 等)零影响。
+func (g *CmdGenerator) resolveToolPath(path string) string {
+	if osWin32 || path == "" {
+		return path
+	}
+	// binDir 是 "%TOOL_DIR%\" 形态(环境变量在运行时设置), 必须先展开才能 stat
+	probe := replaceEnvVariable(path, false)
+	if st, err := os.Stat(probe); err == nil && !st.IsDir() {
+		return path
+	}
+	if strings.HasSuffix(strings.ToLower(path), ".exe") {
+		return path
+	}
+	// Wine 装的 Windows 工具链: 模型里无 .exe 后缀, 但目录里只有 xxx.exe
+	if st, err := os.Stat(probe + ".exe"); err == nil && !st.IsDir() {
+		return path + ".exe"
+	}
+	return path
 }
 func (g *CmdGenerator) getModelName() string {
 	if g.model.Has("name") {
@@ -123,11 +159,17 @@ func (g *CmdGenerator) getCompilerId() string {
 
 // toRelativePathForCompilerArgs(1973-1996)
 func (g *CmdGenerator) toRelativePathForCompilerArgs(path string, quote bool, addDotPrefix bool) string {
+	// Wine 工具链(PE 程序)只认 Windows 路径: 绝对路径一律转成盘符形态。
+	// 相对路径不动(工具按 cwd 解析, 而 cwd 已由 EIDE 设在项目根)。
+	if g.wineToolchain {
+		path = toWinePath(path, g.wineDriveMaps)
+	}
+
 	if g.cwd != "" {
 		if rePath := toRelativePath(g.cwd, path, false); rePath != "" {
 			path = rePath
 			if addDotPrefix {
-				path = "." + localSep() + path
+				path = "." + g.argDirSep() + path
 			}
 		}
 	}
@@ -138,6 +180,15 @@ func (g *CmdGenerator) toRelativePathForCompilerArgs(path string, quote bool, ad
 		return "\"" + path + "\""
 	}
 	return path
+}
+
+// argDirSep: 传给工具链的路径分隔符。
+// Wine 工具链要用 "\\"(它按 Windows 语义解析), 其余用平台默认。
+func (g *CmdGenerator) argDirSep() string {
+	if g.wineToolchain {
+		return "\\"
+	}
+	return localSep()
 }
 
 // getUniqueName(1998-2013)
@@ -484,6 +535,11 @@ func (g *CmdGenerator) getCommandValue(option *JObj, value any) string {
 			}
 			for _, item := range valList {
 				val := item
+				// Wine 工具链: list 型选项(如 linker 的 --scatter)是绝对路径且原样透传,
+				// 必须在这里转换, 否则 PE 程序收到 POSIX 路径会报 L6031U。
+				if g.wineToolchain {
+					val = toWinePath(val, g.wineDriveMaps)
+				}
 				if valueMapper != nil {
 					for _, mk := range valueMapper.Keys() {
 						re, err := regexp.Compile(mk)

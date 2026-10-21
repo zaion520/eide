@@ -55,11 +55,11 @@ type CmdInfo struct {
 // ---- CmdGenerator(290-2251) ----
 
 type CmdGenerator struct {
-	model    *JObj
-	params   *JObj
-	outDir   string
-	binDir   string // 形如 "%TOOL_DIR%\"(历史原因保留环境变量形态)
-	cwd      string
+	model     *JObj
+	params    *JObj
+	outDir    string
+	binDir    string // 形如 "%TOOL_DIR%\"(历史原因保留环境变量形态)
+	cwd       string
 	cmdPrefix string
 
 	toolID      string
@@ -71,16 +71,29 @@ type CmdGenerator struct {
 	compilerVersion string
 	compilerFull    string
 
+	// 工具路径解析缓存: name -> 实际存在的可执行文件路径。
+	// 非 Windows 上运行 Wine 装的 Windows 工具链时, 模型里的 "$path"(如 bin/armclang)
+	// 没有 .exe 后缀, 需要回退到 bin/armclang.exe(见 resolveToolPath)。
+	toolPathCache map[string]string
+
+	// wineToolchain: 非 Windows 平台上运行 Wine 安装的 Windows 工具链(AC5/AC6/IAR/C51)。
+	// 这类工具是真正的 PE 程序, 只认 Windows 路径(Z: 或 C: 开头),
+	// 收到 POSIX 路径(/x/y)会报 "Invalid argument" / "Could not open"。
+	wineToolchain bool
+	// wineDriveMaps: POSIX 前缀 -> Wine 盘符, 按前缀长度降序匹配
+	// (如 "/home/u/.wine/drive_c" -> "C:", "/" -> "Z:")
+	wineDriveMaps []wineDriveMap
+
 	asmCompilerName string
 
-	paramObj     map[string]*JObj
-	models       map[string]*JObj
-	objNameMap   map[string]int
-	srcParams    map[string]string
-	encodings    map[string]string
-	baseOpts     map[string][]string
-	userOpts     map[string][]string
-	formats      map[string]map[string]CmdFormat
+	paramObj      map[string]*JObj
+	models        map[string]*JObj
+	objNameMap    map[string]int
+	srcParams     map[string]string
+	encodings     map[string]string
+	baseOpts      map[string][]string
+	userOpts      map[string][]string
+	formats       map[string]map[string]CmdFormat
 	invokeFormats map[string]InvokeFormat
 }
 
@@ -175,19 +188,19 @@ func (g *CmdGenerator) getUserSpecifiedModelName(modelName string) string {
 // NewCmdGenerator 对齐 C# 构造器(397-763)。
 func NewCmdGenerator(model *JObj, params *JObj, opt GenOption) (*CmdGenerator, error) {
 	g := &CmdGenerator{
-		model:      model,
-		params:     params,
-		outDir:     opt.OutPath,
-		cwd:        opt.Cwd,
-		cmdPrefix:  opt.CompilerPrefix,
-		paramObj:   map[string]*JObj{},
-		models:     map[string]*JObj{},
-		objNameMap: map[string]int{},
-		srcParams:  opt.SrcParams,
-		encodings:  map[string]string{},
-		baseOpts:   map[string][]string{},
-		userOpts:   map[string][]string{},
-		formats:    map[string]map[string]CmdFormat{},
+		model:         model,
+		params:        params,
+		outDir:        opt.OutPath,
+		cwd:           opt.Cwd,
+		cmdPrefix:     opt.CompilerPrefix,
+		paramObj:      map[string]*JObj{},
+		models:        map[string]*JObj{},
+		objNameMap:    map[string]int{},
+		srcParams:     opt.SrcParams,
+		encodings:     map[string]string{},
+		baseOpts:      map[string][]string{},
+		userOpts:      map[string][]string{},
+		formats:       map[string]map[string]CmdFormat{},
 		invokeFormats: map[string]InvokeFormat{},
 	}
 	g.binDir = ""
@@ -281,6 +294,35 @@ func NewCmdGenerator(model *JObj, params *JObj, opt GenOption) (*CmdGenerator, e
 			oldName := g.models[key].Str("$path")
 			g.models[key].Set("$path", &JVal{Kind: JString,
 				Str: strings.ReplaceAll(oldName, "${toolName}", g.models[key].Str("$defToolName"))})
+		}
+	}
+
+	// 非 Windows 平台上跑 Wine 装的 Windows 工具链: 路径必须转成 Windows 形态。
+	// 判据是"解析出的工具可执行文件是 .exe" —— 只有 PE 程序才需要这种转换;
+	// Linux 原生 GCC 等不受影响。
+	//
+	// **位置很关键, 两个约束同时成立**:
+	//  1. 必须在 ${toolPrefix}/${toolName} 替换之后 —— 否则探测的是
+	//     "/usr/bin/${toolPrefix}gcc" 这种未展开的路径(实测 GCC 报 Not found 'C Compiler');
+	//  2. 必须在展开选项(baseOpts)之前 —— 链接器的 --scatter 等 list 型选项
+	//     在展开时就要决定路径形态(实测: 编译全过, 链接报 L6031U)。
+	if !osWin32 {
+		if exePath := replaceEnvVariable(g.getActivedToolFullPath("c"), false); strings.HasSuffix(strings.ToLower(exePath), ".exe") {
+			g.wineToolchain = true
+			g.wineDriveMaps = wineDriveMapsFromPrefix(winePrefixOf(exePath))
+			// 工具链是 Windows 程序: 它按 Wine 的 ACP 解读文件/命令行, 而不是 Linux 的 UTF-8。
+			wineACPOverride = detectWineACP(exePath)
+			isWineToolchain = true
+			// 预热 wineserver(不用 -p 常驻 —— 实测 wine-staging 11.0 + Wayland 下
+			// `wineserver -p` 会让后续所有 wine 客户端挂死, 不可用)。
+			//
+			// 为什么: wineserver 默认在最后一个客户端退出后约 3s 自杀; 自杀后
+			// 新客户端的首次连接要等 server fork+初始化, 实测首连 ~5s。构建各
+			// 阶段(编译→链接→fromelf)间有空档, 若跨越空闲窗口, 每个阶段的
+			// 第一个工具调用都要撞上这个 5s(fromelf ×3 就是 15s 的由来)。
+			// 这里用一条极廉价的命令(wineboot -u 或 wine help)把 server 拉起来,
+			// 之后所有工具调用共享它; 构建过程中工具调用间隔 <3s, server 不退出。
+			warmUpWineserver()
 		}
 	}
 	// $objectSuffix(537-556)
@@ -412,7 +454,19 @@ func NewCmdGenerator(model *JObj, params *JObj, opt GenOption) (*CmdGenerator, e
 		g.baseOpts[name] = baseOptLi
 		g.userOpts[name] = userOptLi
 	}
+
 	return g, nil
+}
+
+// winePrefixOf: 从形如 "<prefix>/drive_c/Keil/..." 的工具路径反推 wine prefix。
+// 找不到 "drive_c" 段时返回空串(此时只用 Z: 映射)。
+func winePrefixOf(exePath string) string {
+	normalized := strings.ReplaceAll(exePath, "\\", "/")
+	idx := strings.Index(normalized, "/drive_c/")
+	if idx < 0 {
+		return ""
+	}
+	return normalized[:idx]
 }
 
 func (g *CmdGenerator) modelsKeys() []string { return sortedKeys(g.models) }

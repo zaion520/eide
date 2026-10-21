@@ -47,15 +47,19 @@ import {
 } from "./StringTable";
 import { ArrayDelRepetition } from "../lib/node-utility/Utility";
 import { GlobalEvent } from "./GlobalEvents";
-import { EIDE_CONF_VERSION, EXCL_KEYS_IN_EIDE_JSON } from "./ProjectConsts";
+import { EIDE_CONF_VERSION, EXCL_KEYS_IN_EIDE_JSON, TARGETS_DIR_NAME } from "./ProjectConsts";
 import { EventItem } from "./EIDETypeDefine";
 import type { ToolchainName } from './types/ToolchainTypes';
 import type { HexUploaderType } from './types/UploadTypes';
 import { VirtualSource } from "./VirtualSource";
 import * as utility from "./utility";
-import { snapshotCurrentTarget, recoverTargetToRoot } from "./TargetManager";
+import * as platform from './Platform';
+import { decideTargetFileEvent } from './targetFileWatchPolicy';
+import { atomicWriteFileSync } from './AtomicWrite';
+import { snapshotCurrentTarget, recoverTargetToRoot, applyTargetSnapshot } from "./TargetManager";
 import {
     isV42Skeleton, splitIntoSkeleton, assembleFromSkeleton, TargetFileData,
+    matchTargetConfigFile, loadTargetFromFile,
 } from "./ProjectStorageV42";
 import { CompileConfigModel, UploadConfigModel, SdccCompileConfigModel, GccCompileConfigModel, RiscvCompileConfigModel, AnyGccCompileConfigModel, MipsCompileConfigModel } from "./EIDEProjectModules";
 import type {
@@ -77,6 +81,8 @@ export abstract class Configuration<ConfigType = any, EventType = any> {
 
     protected cfgFile: File;
     protected watcher: FileWatcher;
+    /** 子目录监听器(可选;仅 v4.2 项目用于 targets/ 热重载) */
+    protected targetsWatcher?: FileWatcher;
 
     protected isDelUnknownKeysWhenLoad: boolean = true;
     protected lastSaveTime: number = 0;
@@ -113,6 +119,8 @@ export abstract class Configuration<ConfigType = any, EventType = any> {
 
     Dispose(): void {
         this.watcher.Close();
+        this.targetsWatcher?.Close();
+        this.targetsWatcher = undefined;
     }
 
     GetFile(): File {
@@ -124,6 +132,12 @@ export abstract class Configuration<ConfigType = any, EventType = any> {
             this.watcher.Watch();
         } catch (error) {
             GlobalEvent.emit('error', <Error>error);
+        }
+        // v4.2 目标目录监听(目录可能尚未创建,失败不影响主链路)
+        try {
+            this.targetsWatcher?.Watch();
+        } catch (error) {
+            GlobalEvent.log_error(error);
         }
     }
 
@@ -204,7 +218,8 @@ export abstract class Configuration<ConfigType = any, EventType = any> {
 
         if (oldContent == undefined || !this.compare(oldContent, newContent)) {
             this.lastSaveTime = Date.now();
-            this.cfgFile.Write(newContent);
+            // 原子写: 双开时并发写同一文件不会产生半截 YAML
+            atomicWriteFileSync(this.cfgFile.path, newContent);
         }
     }
 
@@ -305,6 +320,83 @@ export class ProjectConfiguration<T extends BuilderConfigData>
 
         this.watcher.OnChanged = _cb
         this.watcher.OnRename = _cb;
+
+        // v4.2: 目标数据在 `.eide/targets/<name>/<name>.yml` 子目录下,主文件 watcher 盯不到。
+        // 手改目标文件后把磁盘内容读进内存(热重载),这样后续任何 Save 写出的都是同一份内容,
+        // 手改不会被内存旧值静默覆盖。只挂监听,不改 Save/比较逻辑。
+        this.targetsWatcher = platform.createSafetyFileWatcher(
+            File.from(NodePath.dirname(this.cfgFile.path), TARGETS_DIR_NAME), true, false);
+        this.targetsWatcher.on('error', err => GlobalEvent.log_error(err));
+        this.targetsWatcher.OnChanged = f => this.reloadChangedTargetFile(f);
+        this.targetsWatcher.OnRename = f => this.reloadChangedTargetFile(f);
+    }
+
+    /** 目标目录监听器(v4.2 布局);v4.1 项目不挂 */
+
+    /**
+     * 本次 `Save()` 刚写过的目标文件路径(小写) -> 写入时刻(ms)。
+     *
+     * `Save()` 重写目标文件会触发自身 watcher, 若不抑制就会出现
+     * “写盘 -> 读回 -> 再写” 的无谓刷新链。写入前登记, watcher 命中即消费并跳过。
+     * 带时间戳而非纯 Set: 平台若未回报该次事件, 标记会残留, 之后用户真手改会被误吞。
+     * 超过 `SELF_WRITE_GUARD_MS` 的标记一律视为过期。
+     */
+    private selfWrittenTargetFiles: Map<string, number> = new Map();
+    /**
+     * 外部手改了 `targets/<name>/<name>.yml` -> 把磁盘内容读回内存。
+     *
+     * 只处理目标主文件;旁路文件(files.options.yml / libs.yml / st.option.bytes.ini)
+     * 由 `AbstractProject.onEideDirChanged` 单独处理,不在此重复接管。
+     */
+    private reloadChangedTargetFile(changedFile: File): void {
+        try {
+            // 模型尚未就绪(构造期/加载失败)时无法原位恢复,直接跳过
+            if (!this.toolchainConfigModel || !this.uploadConfigModel) { return; }
+
+            const eideDir = NodePath.dirname(this.cfgFile.path);
+            const targetName = matchTargetConfigFile(eideDir, changedFile.path);
+            if (!targetName) { return; }
+
+            // 本次 Save() 自己写的 -> 消费标记并跳过(避免自触发刷新链);
+            // 标记过期则视为真实外部修改(判定见 targetFileWatchPolicy, 有单测覆盖)
+            const changedKey = changedFile.path.toLowerCase();
+            const writtenAt = this.selfWrittenTargetFiles.get(changedKey);
+            if (writtenAt !== undefined) {
+                this.selfWrittenTargetFiles.delete(changedKey);
+                if (decideTargetFileEvent({ now: Date.now(), selfWrittenAt: writtenAt }) === 'ignore-self-write') {
+                    return;
+                }
+            }
+
+            const info = loadTargetFromFile(eideDir, targetName);
+            if (!info) { return; } // 文件被删/正在写(半截内容) -> 忽略本次事件
+
+            const prjConfig = <any>this.config;
+            if (!prjConfig.targets || prjConfig.targets[targetName] === undefined) {
+                return; // 骨架里没有这个目标(新建/删除中) -> 交给主文件链路
+            }
+
+            // 非激活目标:直接替换表中条目即可
+            if (prjConfig.mode !== targetName) {
+                prjConfig.targets[targetName] = info;
+                return;
+            }
+
+            // 激活目标:数据同时平铺在根节点,需整份恢复(工具链/烧录器配置模型按引用绑定,
+            // 由 applyTargetSnapshot 原位写入)
+            prjConfig.targets[targetName] = info;
+            applyTargetSnapshot(prjConfig, info, {
+                toolchainConfigModel: this.toolchainConfigModel,
+                uploadConfigModel: this.uploadConfigModel,
+                customDep: this.CustomDep_getDependence(),
+                toAbsolutePath: (path) => this.toAbsolutePath(path)
+            });
+
+            // 通知上层重建编译配置/源文件树
+            this.emit('dataChanged', { type: 'compiler' });
+        } catch (error) {
+            GlobalEvent.log_error(error);
+        }
     }
 
     static parseProjectFile<T extends BuilderConfigData>(input: string): ProjectConfigData<T> {
@@ -1376,6 +1468,18 @@ export class ProjectConfiguration<T extends BuilderConfigData>
         }
     }
 
+    /**
+     * 取某个 uploader 的配置字段名列表(用于外部校验写入的 key 是否合法)。
+     * 不同 uploader 的字段集不同,所以需要按类型查。
+     */
+    getUploadConfigKeys(uploader: HexUploaderType): string[] {
+        try {
+            return Object.keys((<any>UploadConfigModel.getInstance(uploader, this.project)).GetDefault() || {});
+        } catch {
+            return [];
+        }
+    }
+
     Save(force?: boolean) {
         const usrCtx = this.getProjectUsrCtx();
         usrCtx.target = this.config.mode; // save current target
@@ -1394,7 +1498,9 @@ export class ProjectConfiguration<T extends BuilderConfigData>
                     const content = yaml.stringify(item.data, { indent: 2, lineWidth: 1000 });
                     if (!fs.existsSync(targetFile) || fs.readFileSync(targetFile, 'utf8') !== content) {
                         fs.mkdirSync(NodePath.dirname(targetFile), { recursive: true });
-                        fs.writeFileSync(targetFile, content, 'utf8');
+                        // 登记自写路径, 让 targets watcher 跳过本次事件
+                        this.selfWrittenTargetFiles.set(targetFile.toLowerCase(), Date.now());
+                        atomicWriteFileSync(targetFile, content);
                     }
                 }
 

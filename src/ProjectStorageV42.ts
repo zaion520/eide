@@ -18,12 +18,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import type { ProjectTargetInfo } from './EIDETypeDefine';
-import { EIDE_CONF_VERSION_V41, PROJECT_CONFIG_FILE_NAME } from './ProjectConsts';
+import { EIDE_CONF_VERSION_V41, PROJECT_CONFIG_FILE_NAME, TARGETS_DIR_NAME } from './ProjectConsts';
 import { getTargetLibsFileName, getTargetOptionBytesFileName } from './TargetSidecars';
+import { atomicWriteFileSync } from './AtomicWrite';
 
 export const EIDE_CONF_VERSION_V42 = '4.2';
 
-const TARGETS_DIR_NAME = 'targets';
 const V41_BACKUP_NAME = 'eide.v4.1.bak.yml';
 
 function copyObject(src: any): any {
@@ -165,6 +165,57 @@ export function assembleFromSkeleton(skeleton: any, targetFiles: TargetFileData[
 }
 
 // ---------------------------------------------------------------------------
+// hot reload of a single target file (external edit support)
+// ---------------------------------------------------------------------------
+
+/** `<eideDir>/targets/<name>/<name>.yml` 的绝对路径 */
+export function getTargetConfigFilePath(eideDir: string, targetName: string): string {
+    return path.join(getTargetDir(eideDir, targetName), `${targetName}.yml`);
+}
+
+/**
+ * 判断某个被改动的绝对路径是否为 `targets/<name>/<name>.yml`。
+ *
+ * 只认目标主文件: `files.options.yml` / `libs.yml` / `st.option.bytes.ini` 等旁路文件
+ * 另有各自的处理链(见 `AbstractProject.onEideDirChanged`),不能在这里重复接管。
+ *
+ * @returns 命中的目标名,不命中返回 undefined
+ */
+export function matchTargetConfigFile(eideDir: string, changedPath: string): string | undefined {
+    const targetsRoot = path.join(eideDir, TARGETS_DIR_NAME);
+    const rel = path.relative(targetsRoot, changedPath);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) { return undefined; }
+
+    const parts = rel.split(/[\\/]+/);
+    if (parts.length !== 2) { return undefined; } // 必须是 targets/<name>/<file>
+
+    const [dirName, fileName] = parts;
+    // 目录名与文件名必须同名(重命名目标时目录与文件一起改名),且后缀为 .yml
+    if (fileName.toLowerCase() !== `${dirName.toLowerCase()}.yml`) { return undefined; }
+
+    return dirName;
+}
+
+/**
+ * 把磁盘上的单个目标文件读回运行时形态。
+ *
+ * 用于“用户手改了 `targets/<name>/<name>.yml`”的场景: 只要把磁盘内容读进内存,
+ * 之后任何 `Save()` 写出的都是同一份内容,手改就不会被内存旧值覆盖。
+ *
+ * @returns 运行时目标信息;文件不存在或解析失败时返回 undefined(调用方忽略该次事件)
+ */
+export function loadTargetFromFile(eideDir: string, targetName: string): ProjectTargetInfo | undefined {
+    const filePath = getTargetConfigFilePath(eideDir, targetName);
+    if (!fs.existsSync(filePath)) { return undefined; }
+    try {
+        return unpackTargetFromDisk(yaml.parse(fs.readFileSync(filePath, 'utf8')));
+    } catch (error) {
+        console.error(error);
+        return undefined;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // migration (real fs, idempotent, crash-safe ordering)
 // ---------------------------------------------------------------------------
 
@@ -175,7 +226,7 @@ function getTargetDir(eideDir: string, targetName: string): string {
 function writeTargetFile(eideDir: string, targetName: string, fileName: string, content: string): void {
     const targetDir = getTargetDir(eideDir, targetName);
     fs.mkdirSync(targetDir, { recursive: true });
-    fs.writeFileSync(path.join(targetDir, fileName), content, 'utf8');
+    atomicWriteFileSync(path.join(targetDir, fileName), content);
 }
 
 function moveFileIfExists(oldPath: string, newPath: string): void {
@@ -213,7 +264,7 @@ export function migrateProjectFileToV42(cfgFilePath: string): void {
     // 1. backup original file (never overwrite an existing backup)
     const backupPath = path.join(eideDir, V41_BACKUP_NAME);
     if (!fs.existsSync(backupPath)) {
-        fs.writeFileSync(backupPath, raw, 'utf8');
+        atomicWriteFileSync(backupPath, raw);
     }
 
     // 2. write per-target data files first (crash-safe: skeleton is written last)
@@ -272,7 +323,7 @@ export function migrateProjectFileToV42(cfgFilePath: string): void {
 
     // 5. finally rewrite eide.yml as the v4.2 skeleton
     const { skeleton } = splitIntoSkeleton(parsed);
-    fs.writeFileSync(cfgFilePath, yaml.stringify(skeleton), 'utf8');
+    atomicWriteFileSync(cfgFilePath, yaml.stringify(skeleton));
 }
 
 // ---------------------------------------------------------------------------
@@ -370,7 +421,7 @@ export function exportProjectAsV41(eideDir: string): DowngradeExportResult {
     }
 
     const outPath = path.join(eideDir, `eide.${EIDE_CONF_VERSION_V41}.yml`);
-    fs.writeFileSync(outPath, dumpV41ProjectFile(mergeV42ToV41Disk(parsed, targetFiles)), 'utf8');
+    atomicWriteFileSync(outPath, dumpV41ProjectFile(mergeV42ToV41Disk(parsed, targetFiles)));
 
     // 旁路文件:v4.1 在 `.eide/` 根按目标名查找
     const sidecarFiles: { from: string; to: string }[] = [];
@@ -390,7 +441,7 @@ export function exportProjectAsV41(eideDir: string): DowngradeExportResult {
     }
     if (Object.keys(sharedOptions.options).length > 0) {
         const sharedPath = path.join(eideDir, 'files.options.yml');
-        fs.writeFileSync(sharedPath, yaml.stringify(sharedOptions, { indent: 4, lineWidth: 1000 }), 'utf8');
+        atomicWriteFileSync(sharedPath, yaml.stringify(sharedOptions, { indent: 4, lineWidth: 1000 }));
         sidecarFiles.push({ from: sharedPath, to: sharedPath });
     }
 

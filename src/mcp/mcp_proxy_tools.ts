@@ -282,5 +282,86 @@ export function createMcpServer(delegateToolCall: ToolDelegate): McpServer {
         async (args) => delegateToolCall('eide_set_builder_opts', args)
     );
 
+    server.registerTool(
+        'eide_get_toolchain_config',
+        {
+            title: 'Get toolchain config',
+            description: 'Get the per-target toolchain config (JSON object): cpuType, floatingPointHardware, ' +
+                'storageLayout (memory layout that generates the scatter file), useCustomScatterFile, ' +
+                'scatterFilePath, archExtensions. Reading this tells you whether the scatter file is auto-generated.',
+            inputSchema: {
+                uid: uidSchema,
+                targetName: z.string().optional().describe(
+                    'Target name. Optional: defaults to the active target.'
+                )
+            }
+        },
+        async (args) => delegateToolCall('eide_get_toolchain_config', args)
+    );
+
+    server.registerTool(
+        'eide_set_toolchain_config',
+        {
+            title: 'Set toolchain config',
+            description: 'Merge fields into the per-target toolchain config and save the project. This is the correct way ' +
+                'to change the memory layout / scatter file: edits go through the project model and are persisted to ' +
+                '.eide/targets/<target>/<target>.yml, so they are never overwritten. ' +
+                'To use your own .sct, set useCustomScatterFile=true and scatterFilePath to your file. ' +
+                'To keep the auto-generated one, set useCustomScatterFile=false and edit storageLayout instead.',
+            inputSchema: {
+                uid: uidSchema,
+                targetName: z.string().optional().describe(
+                    'Target name. Optional: defaults to the active target.'
+                ),
+                config: z.record(z.string(), z.unknown()).describe(
+                    'Partial toolchain config object; only the given keys are merged in. ' +
+                    'Example: {"useCustomScatterFile": true, "scatterFilePath": "./my.sct"}'
+                )
+            }
+        },
+        async (args) => delegateToolCall('eide_set_toolchain_config', args)
+    );
+
+    server.registerTool(
+        'eide_get_upload_config',
+        {
+            title: 'Get flash/upload config',
+            description: 'Get the per-target flash (upload) configuration: current uploader type, all configured ' +
+                'uploader types for this target, and the option object of the active uploader.',
+            inputSchema: {
+                uid: uidSchema,
+                targetName: z.string().optional().describe(
+                    'Target name. Optional: defaults to the active target.'
+                )
+            }
+        },
+        async (args) => delegateToolCall('eide_get_upload_config', args)
+    );
+
+    server.registerTool(
+        'eide_set_upload_config',
+        {
+            title: 'Set flash/upload config',
+            description: 'Merge fields into the per-target flash (upload) configuration and save the project. ' +
+                'Optionally switch the uploader type first (uploader). Edits go through the project model and are ' +
+                'persisted to .eide/targets/<target>/<target>.yml, so they are never overwritten.',
+            inputSchema: {
+                uid: uidSchema,
+                targetName: z.string().optional().describe(
+                    'Target name. Optional: defaults to the active target.'
+                ),
+                uploader: z.string().optional().describe(
+                    'Uploader type to use, e.g. "JLink", "STLink", "pyOCD", "OpenOCD", "probe-rs", ' +
+                    '"stcgal", "STVP", "Custom". Optional: keeps the current one.'
+                ),
+                config: z.record(z.string(), z.unknown()).optional().describe(
+                    'Partial upload config object; only the given keys are merged in. ' +
+                    'Example: {"bin": "build/Debug/app.hex", "baseAddr": "0x08000000"}'
+                )
+            }
+        },
+        async (args) => delegateToolCall('eide_set_upload_config', args)
+    );
+
     return server;
 }

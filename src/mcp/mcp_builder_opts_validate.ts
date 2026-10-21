@@ -73,3 +73,4 @@ export function validateBuilderOptions(prj: AbstractProject, options: unknown): 
     }
     return formatAjvErrors(validate.errors);
 }
+
