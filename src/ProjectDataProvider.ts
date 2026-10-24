@@ -87,7 +87,7 @@ import * as events from 'events';
 
 import * as fs from 'fs';
 
-import { getGlobalState } from './Platform';
+import { getGlobalState, osType } from './Platform';
 
 import * as iarParser from './IarProjectParser';
 
@@ -2162,7 +2162,9 @@ export class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem
             if (reKeilPrjDir === '.') {
                 t.command = t.command.replace('$<cd:mdk-proj-dir> && ', '');
             } else {
-                if (t.command.startsWith('bash')) {
+                // 非 win32 上 `cd /D` 是 cmd 专用开关, `\` 也不是分隔符 —— 命令会被
+                // /bin/bash 执行, 前缀必须用 unix 形态, 否则 POST-BUILD 任务直接失败。
+                if (t.command.startsWith('bash') || osType() !== 'win32') {
                     t.command = t.command.replace('$<cd:mdk-proj-dir>', `cd ${File.ToUnixPath(reKeilPrjDir)}`);
                 } else {
                     if (File.isAbsolute(reKeilPrjDir))

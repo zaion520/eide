@@ -39,6 +39,8 @@ import { DependenceManager } from './DependenceManager';
 import { ArrayDelRepetition } from '../lib/node-utility/Utility';
 import { CurrentDevice, C51BaseCompileData, ArmBaseCompileData, ARMStorageLayout, ArmBaseCompileConfigModel } from './EIDEProjectModules';
 import * as utility from './utility';
+import { osType } from './Platform';
+import { KEIL_COPY_TASK_NAME, renderKeilCopyCommand } from './keilCopyTask';
 
 export interface KeilRteDependence {
     name: string;
@@ -824,16 +826,17 @@ class ARMParser extends KeilParser<KeilARMOption> {
                     }
                     if (total_cnt > 0) {
                         // Copy files to compate Keil User Commands
+                        // 命令按平台渲染: cmd 下 `mkdir` 对已存在目录会报错、`copy` 缺 `/Y`
+                        // 会在目标存在时询问(子进程 stdin 是 NUL, 询问必答 No → 0 个文件),
+                        // posix 下 `copy` 根本不存在。详见 src/keilCopyTask.ts。
                         const copyFilesCmd = {
-                            "name": '[Copy linker output for Keil User Commands]',
-                            "command": `$<cd:mdk-proj-dir> && mkdir \${KEIL_OUTPUT_DIR} & copy "\${OutDir}\\\${ProjectName}.axf" "\${KEIL_OUTPUT_DIR}\\\${KEIL_OUTPUT_NAME}.axf"`,
+                            "name": KEIL_COPY_TASK_NAME,
+                            "command": `$<cd:mdk-proj-dir> && ${renderKeilCopyCommand({
+                                keilOutputName: env['KEIL_OUTPUT_NAME'] ? '${KEIL_OUTPUT_NAME}' : '${ProjectName}'
+                            }, osType())}`,
                             "disable": actived_cnt == 0,
                             "abortAfterFailed": true
                         };
-                        if (!env['KEIL_OUTPUT_NAME']) {
-                            copyFilesCmd['command'] = copyFilesCmd['command']
-                                .replace('${KEIL_OUTPUT_NAME}', () => '${ProjectName}');
-                        }
                         eideOption.afterBuildTasks.splice(0, 0, copyFilesCmd);
                     }
                     if (mdk_CreateLib) {

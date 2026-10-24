@@ -58,6 +58,7 @@ import {
 import { exeSuffix, osType } from "./Platform";
 import { FileWatcher } from "../lib/node-utility/FileWatcher";
 import { decideScatterWrite } from "./scatterFilePolicy";
+import { repairKeilCopyTasks } from "./keilCopyTask";
 import { STVPFlasherOptions } from './HexUploader';
 import * as ArmCpuUtils from './ArmCpuUtils';
 import { view_str$gen_sct_failed } from './StringTable';
@@ -458,6 +459,12 @@ export abstract class CodeBuilder {
             env: this.project.getProjectVariables(),
             sysPaths: []
         };
+
+        // Keil 导入时合成的 "拷贝链接产物" 任务: 存量工程里存的是旧的 cmd-only 命令
+        // (`mkdir` 对已存在目录报错, `copy` 缺 `/Y` 在目标存在时询问并被 NUL stdin
+        // 判为 No, posix 下 `copy` 不存在)。这里只修构建用的 options 副本, 不回写
+        // `eide.yml` —— 用户不会为一条自动生成的任务重新导入工程。
+        repairKeilCopyTasks(builderOptions.options, osType());
 
         // set ram size from env
         if (builderOptions.ram == undefined &&
